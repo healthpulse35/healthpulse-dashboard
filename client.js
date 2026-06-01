@@ -172,11 +172,17 @@ function App() {
   const [metric, setMetric] = useState("Load");
   const [showRaw, setShowRaw] = useState(false);
 
-  const granOpts = { "3M": ["Daily", "Weekly"], "6M": ["Weekly", "Monthly"], "1Y": ["Weekly", "Monthly"] };
-  const granDefault = { "3M": "Weekly", "6M": "Weekly", "1Y": "Monthly" };
+  const granOpts = {
+    "3M": ["Daily", "Weekly"],
+    "6M": ["Weekly", "Monthly"],
+    "1Y": ["Weekly", "Monthly"],
+    "2Y": ["Weekly", "Monthly"],
+    "All": ["Monthly"],
+  };
+  const granDefault = { "3M": "Weekly", "6M": "Weekly", "1Y": "Monthly", "2Y": "Monthly", "All": "Monthly" };
   const onRange = (r) => { setRange(r); const d = granDefault[r]; setVolGran(d); setZoneGran(d); setSleepGran(d); };
 
-  const nDays = { "3M": 90, "6M": 180, "1Y": 365 }[range];
+  const nDays = { "3M": 90, "6M": 180, "1Y": 365, "2Y": 730, "All": DAYS.length }[range];
   const view = DAYS.slice(-nDays);
   const cur = DAYS[DAYS.length - 1] || {};
 
@@ -256,7 +262,7 @@ function App() {
           <h1 className="text-2xl font-bold mt-1">Long-Term Trends</h1>
           <div style=${{ color: C.muted }} className="text-xs mt-1">${todayStr}</div>
         </div>
-        <${Pills} options=${["3M", "6M", "1Y"]} value=${range} onChange=${onRange} />
+        <${Pills} options=${["3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
       </div>
 
       <div className="flex flex-wrap gap-3 mb-4">
