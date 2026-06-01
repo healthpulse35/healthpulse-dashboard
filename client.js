@@ -34,7 +34,7 @@ const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","
 const r1 = (v) => Math.round(v * 10) / 10;
 const r2 = (v) => Math.round(v * 100) / 100;
 const parseISO = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
-const fmtDate = (d) => d.getDate() + " " + MON[d.getMonth()];
+const fmtDate = (d) => d.getDate() + " " + MON[d.getMonth()] + " " + String(d.getFullYear()).slice(2);
 
 // ---------- normalize incoming server data ----------
 // In Storage-hosted mode, window.__DASHBOARD_DATA__ is set by index.html
