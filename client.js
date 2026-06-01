@@ -158,6 +158,67 @@ function yearLines(series) {
   );
 }
 
+// ---------- race markers ----------
+// Find the label in `series` whose date best matches a given race date.
+// Works for both raw view rows (`.date`) and bucket rows (`.days[]`).
+const DAYMS = 86400000;
+function labelForDate(series, raceDate) {
+  const t = raceDate.getTime();
+  for (const item of series) {
+    if (item.date) {
+      if (Math.abs(item.date.getTime() - t) < DAYMS / 2) return item.label;
+    } else if (item.days && item.days.length) {
+      const a = item.days[0].date.getTime();
+      const z = item.days[item.days.length - 1].date.getTime();
+      if (t >= a - DAYMS / 2 && t <= z + DAYMS / 2) return item.label;
+    }
+  }
+  return null;
+}
+
+// Amber dashed reference lines for every visible race in the current chart.
+// Labels are rendered above the chart; multiple races in a small window
+// would overlap, so labels are kept short and we accept that.
+function raceLines(series, races) {
+  return races
+    .filter((r) => r.show)
+    .map((r) => {
+      const x = labelForDate(series, r.date);
+      if (!x) return null;
+      const shortName = r.name.length > 18 ? r.name.slice(0, 17) + "…" : r.name;
+      return h(ReferenceLine, {
+        key: "race" + r.id,
+        x,
+        stroke: C.amber,
+        strokeDasharray: "4 3",
+        strokeOpacity: 0.85,
+        ifOverflow: "extendDomain",
+        label: { value: shortName, position: "top", fill: C.amber, fontSize: 10, offset: 6 },
+      });
+    })
+    .filter(Boolean);
+}
+
+// LocalStorage-backed race list. Stored as { id, name, dateISO, show }.
+const RACES_KEY = "healthpulse_races_v1";
+function loadRaces() {
+  try {
+    const raw = localStorage.getItem(RACES_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw).map((r) => ({
+      id: r.id, name: r.name, show: r.show !== false,
+      date: new Date(r.dateISO),
+    }));
+  } catch { return []; }
+}
+function saveRaces(races) {
+  try {
+    localStorage.setItem(RACES_KEY, JSON.stringify(
+      races.map((r) => ({ id: r.id, name: r.name, dateISO: r.date.toISOString(), show: r.show }))
+    ));
+  } catch { /* ignore quota errors */ }
+}
+
 // ---------- ui primitives ----------
 const Card = ({ title, sub, right, children }) =>
   html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5 mb-4">
@@ -212,6 +273,20 @@ function App() {
   const [sport, setSport] = useState("All");
   const [metric, setMetric] = useState("Load");
   const [showRaw, setShowRaw] = useState(false);
+
+  // Races: persisted to localStorage so they survive reloads / re-tokens.
+  const [races, setRaces] = useState(loadRaces);
+  const [rName, setRName] = useState("");
+  const [rDate, setRDate] = useState("");
+  React.useEffect(() => { saveRaces(races); }, [races]);
+  const addRace = () => {
+    if (!rName.trim() || !rDate) return;
+    const [y, m, d] = rDate.split("-").map(Number);
+    setRaces((rs) => [...rs, { id: Date.now(), name: rName.trim(), date: new Date(y, m - 1, d), show: true }]);
+    setRName(""); setRDate("");
+  };
+  const toggleRace = (id) => setRaces((rs) => rs.map((r) => (r.id === id ? { ...r, show: !r.show } : r)));
+  const removeRace = (id) => setRaces((rs) => rs.filter((r) => r.id !== id));
 
   const granOpts = {
     "3M": ["Daily", "Weekly"],
@@ -329,6 +404,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
               <${Tooltip} content=${h(TT)} />
               ${yearLines(view)}
+              ${raceLines(view, races)}
               <${Area} type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" dot=${false} />
               <${Line} type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
             <//>
@@ -352,6 +428,7 @@ function App() {
               <${Tooltip} content=${h(TT)} />
               <${ReferenceLine} y=${0} stroke=${C.border} />
               ${yearLines(view)}
+              ${raceLines(view, races)}
               <${Line} type="monotone" dataKey="form" name="Form" stroke="#e6eaf0" strokeWidth=${1.8} dot=${false} />
             <//>
           <//>
@@ -376,6 +453,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[0, 2]} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v.toFixed(2) })} />
               ${yearLines(view)}
+              ${raceLines(view, races)}
               <${Line} type="monotone" dataKey="acwr" name="ACWR" stroke=${C.cyan} strokeWidth=${1.8} dot=${false} />
             <//>
           <//>
@@ -389,6 +467,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${efDomain} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v.toFixed(2) })} />
               ${yearLines(efSeries)}
+              ${raceLines(efSeries, races)}
               <${Line} type="monotone" dataKey="session" name="Per session" stroke="#9aa6b6" strokeWidth=${1} strokeOpacity=${0.4} dot=${{ r: 2.5, fill: "#9aa6b6" }} connectNulls=${true} isAnimationActive=${false} />
               <${Line} type="monotone" dataKey="trend" name="10-session trend" stroke=${C.cyan} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
@@ -412,6 +491,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
               <${Tooltip} cursor=${{ fill: "#ffffff08" }} content=${h(TT, { fmt: (v) => mm.f(v) + mm.u })} />
               ${yearLines(volBuckets)}
+              ${raceLines(volBuckets, races)}
               <${Bar} dataKey=${metric} name=${metric} fill=${barColor} radius=${[3, 3, 0, 0]} />
             <//>
           <//>
@@ -426,6 +506,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
               <${Tooltip} cursor=${{ fill: "#ffffff08" }} content=${h(ZoneTT)} />
               ${yearLines(zoneBuckets)}
+              ${raceLines(zoneBuckets, races)}
               ${zoneKeys.map((k, i) =>
                 html`<${Bar} key=${k} dataKey=${k} name=${zoneName[i]} stackId="z" fill=${zoneColor[i]} radius=${i === 4 ? [3, 3, 0, 0] : 0} />`
               )}
@@ -446,6 +527,7 @@ function App() {
               <${Tooltip} cursor=${{ fill: "#ffffff08" }} content=${h(TT, { fmt: (v) => v.toFixed(1) + " h" })} />
               <${ReferenceLine} y=${7.5} stroke=${C.green} strokeDasharray="3 3" strokeOpacity=${0.5} />
               ${yearLines(sleepBuckets)}
+              ${raceLines(sleepBuckets, races)}
               <${Bar} dataKey="sleep" name="Sleep" radius=${[2, 2, 0, 0]}>
                 ${sleepSeries.map((d, i) => html`<${Cell} key=${i} fill=${sleepColor(d.sleep)} />`)}
               <//>
@@ -465,6 +547,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${hrvDomain} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v + " ms" })} />
               ${yearLines(view)}
+              ${raceLines(view, races)}
               ${showRaw ? html`<${Line} type="monotone" dataKey="raw" name="Overnight" stroke="#9aa6b6" strokeWidth=${1} strokeDasharray="2 3" strokeOpacity=${0.7} dot=${false} isAnimationActive=${false} connectNulls=${true} />` : null}
               <${Line} type="monotone" dataKey="hrv" name="7-day avg" stroke=${C.green} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
@@ -479,6 +562,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${rhrDomain} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v + " bpm" })} />
               ${yearLines(view)}
+              ${raceLines(view, races)}
               <${Line} type="monotone" dataKey="rhr" name="Resting HR" stroke=${C.teal} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
           <//>
@@ -486,8 +570,40 @@ function App() {
 
       </div>
 
+      <${Card} title="Key Races" sub="Amber markers appear on every chart. Stored in this browser only.">
+        <div className="flex flex-wrap gap-2 mb-4">
+          <input value=${rName} onChange=${(e) => setRName(e.target.value)} placeholder="Race name (e.g. HYROX Bali)"
+            style=${{ background: C.bg, border: "1px solid " + C.border, color: C.text, borderRadius: 8 }}
+            className="px-3 py-2 text-sm flex-1 min-w-[160px]" />
+          <input type="date" value=${rDate} onChange=${(e) => setRDate(e.target.value)}
+            style=${{ background: C.bg, border: "1px solid " + C.border, color: C.text, borderRadius: 8, colorScheme: "dark" }}
+            className="px-3 py-2 text-sm" />
+          <button onClick=${addRace} style=${{ background: C.cyan, color: "#06212a", borderRadius: 8 }} className="px-4 py-2 text-sm font-semibold">Add race</button>
+        </div>
+        <div className="flex flex-col gap-2">
+          ${races.length === 0
+            ? html`<div style=${{ color: C.muted }} className="text-sm">No races added yet.</div>`
+            : races.slice().sort((a, b) => a.date - b.date).map((r) =>
+              html`<div key=${r.id} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10 }} className="flex items-center justify-between gap-3 px-3 py-2">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span style=${{ color: r.show ? C.amber : C.muted }}>▎</span>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold truncate" style=${{ color: r.show ? C.text : C.muted }}>${r.name}</div>
+                    <div style=${{ color: C.muted }} className="text-xs">${r.date.getDate()} ${MON[r.date.getMonth()]} ${r.date.getFullYear()}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button onClick=${() => toggleRace(r.id)}
+                    style=${{ background: r.show ? C.amber : "transparent", color: r.show ? "#2a1d02" : C.muted, border: "1px solid " + (r.show ? C.amber : C.border), borderRadius: 999 }}
+                    className="px-3 py-1 text-xs font-semibold">${r.show ? "Shown" : "Hidden"}</button>
+                  <button onClick=${() => removeRace(r.id)} style=${{ color: C.muted }} className="px-2 py-1 text-sm">✕</button>
+                </div>
+              </div>`)}
+        </div>
+      <//>
+
       <div style=${{ color: C.muted }} className="text-[11px] text-center mt-2 mb-4">
-        Live data · ${DAYS.length} days · ${AE_SESSIONS.length} aerobic-efficiency sessions
+        Live data · ${DAYS.length} days · ${AE_SESSIONS.length} aerobic-efficiency sessions · ${races.length} race${races.length === 1 ? "" : "s"}
       </div>
     </div>
   </div>`;
