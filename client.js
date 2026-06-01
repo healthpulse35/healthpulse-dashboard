@@ -117,6 +117,47 @@ function bucketize(view, gran) {
 
 const axis = { stroke: C.muted, fontSize: 11 };
 
+// Pick out a representative label for each year transition in `series`.
+// Works for any series whose items carry either a `.date` (view rows, AE)
+// or `.days[]` (bucket rows). Returns [{label, year}], one per distinct
+// year that appears in the window.
+function yearMarkers(series) {
+  const out = [];
+  let prevYear = null;
+  for (const item of series) {
+    const d = item.date || (item.days && item.days[0] && item.days[0].date);
+    if (!d) continue;
+    const y = d.getFullYear();
+    if (y !== prevYear) {
+      out.push({ label: item.label, year: y });
+      prevYear = y;
+    }
+  }
+  return out;
+}
+
+// Vertical reference lines at each year boundary, labelled with the year.
+// Renders directly inside a recharts chart (returns an array of elements).
+function yearLines(series) {
+  return yearMarkers(series).map((m) =>
+    h(ReferenceLine, {
+      key: "yr" + m.year,
+      x: m.label,
+      stroke: C.muted,
+      strokeDasharray: "2 4",
+      strokeOpacity: 0.55,
+      ifOverflow: "extendDomain",
+      label: {
+        value: String(m.year),
+        position: "insideTopLeft",
+        fill: C.muted,
+        fontSize: 11,
+        offset: 4,
+      },
+    })
+  );
+}
+
 // ---------- ui primitives ----------
 const Card = ({ title, sub, right, children }) =>
   html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5 mb-4">
@@ -224,7 +265,7 @@ function App() {
     return [Math.floor(Math.min(...v) - 6), Math.ceil(Math.max(...v) + 6)];
   }, [hrvSeries, showRaw]);
 
-  const efSeries = AE_SESSIONS.map((s) => ({ label: fmtDate(s.date), session: s.ef, trend: s.trend }));
+  const efSeries = AE_SESSIONS.map((s) => ({ label: fmtDate(s.date), session: s.ef, trend: s.trend, date: s.date }));
   const efDomain = (() => {
     const v = efSeries.flatMap((x) => [x.session, x.trend]).filter((x) => x != null);
     if (!v.length) return [1, 3];
@@ -287,6 +328,7 @@ function App() {
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
               <${Tooltip} content=${h(TT)} />
+              ${yearLines(view)}
               <${Area} type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" dot=${false} />
               <${Line} type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
             <//>
@@ -309,6 +351,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[-45, 35]} />
               <${Tooltip} content=${h(TT)} />
               <${ReferenceLine} y=${0} stroke=${C.border} />
+              ${yearLines(view)}
               <${Line} type="monotone" dataKey="form" name="Form" stroke="#e6eaf0" strokeWidth=${1.8} dot=${false} />
             <//>
           <//>
@@ -332,6 +375,7 @@ function App() {
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[0, 2]} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v.toFixed(2) })} />
+              ${yearLines(view)}
               <${Line} type="monotone" dataKey="acwr" name="ACWR" stroke=${C.cyan} strokeWidth=${1.8} dot=${false} />
             <//>
           <//>
@@ -344,6 +388,7 @@ function App() {
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${efDomain} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v.toFixed(2) })} />
+              ${yearLines(efSeries)}
               <${Line} type="monotone" dataKey="session" name="Per session" stroke="#9aa6b6" strokeWidth=${1} strokeOpacity=${0.4} dot=${{ r: 2.5, fill: "#9aa6b6" }} connectNulls=${true} isAnimationActive=${false} />
               <${Line} type="monotone" dataKey="trend" name="10-session trend" stroke=${C.cyan} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
@@ -366,6 +411,7 @@ function App() {
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${36} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
               <${Tooltip} cursor=${{ fill: "#ffffff08" }} content=${h(TT, { fmt: (v) => mm.f(v) + mm.u })} />
+              ${yearLines(volBuckets)}
               <${Bar} dataKey=${metric} name=${metric} fill=${barColor} radius=${[3, 3, 0, 0]} />
             <//>
           <//>
@@ -379,6 +425,7 @@ function App() {
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${36} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
               <${Tooltip} cursor=${{ fill: "#ffffff08" }} content=${h(ZoneTT)} />
+              ${yearLines(zoneBuckets)}
               ${zoneKeys.map((k, i) =>
                 html`<${Bar} key=${k} dataKey=${k} name=${zoneName[i]} stackId="z" fill=${zoneColor[i]} radius=${i === 4 ? [3, 3, 0, 0] : 0} />`
               )}
@@ -398,6 +445,7 @@ function App() {
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[0, 10]} />
               <${Tooltip} cursor=${{ fill: "#ffffff08" }} content=${h(TT, { fmt: (v) => v.toFixed(1) + " h" })} />
               <${ReferenceLine} y=${7.5} stroke=${C.green} strokeDasharray="3 3" strokeOpacity=${0.5} />
+              ${yearLines(sleepBuckets)}
               <${Bar} dataKey="sleep" name="Sleep" radius=${[2, 2, 0, 0]}>
                 ${sleepSeries.map((d, i) => html`<${Cell} key=${i} fill=${sleepColor(d.sleep)} />`)}
               <//>
@@ -416,6 +464,7 @@ function App() {
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${hrvDomain} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v + " ms" })} />
+              ${yearLines(view)}
               ${showRaw ? html`<${Line} type="monotone" dataKey="raw" name="Overnight" stroke="#9aa6b6" strokeWidth=${1} strokeDasharray="2 3" strokeOpacity=${0.7} dot=${false} isAnimationActive=${false} connectNulls=${true} />` : null}
               <${Line} type="monotone" dataKey="hrv" name="7-day avg" stroke=${C.green} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
@@ -429,6 +478,7 @@ function App() {
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${rhrDomain} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v + " bpm" })} />
+              ${yearLines(view)}
               <${Line} type="monotone" dataKey="rhr" name="Resting HR" stroke=${C.teal} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
           <//>
