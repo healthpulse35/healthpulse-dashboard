@@ -283,16 +283,19 @@ function statusFitness(days) {
   if (cur == null) return null;
   const recent7 = days.slice(-8, -1).map((d) => d.fitness).filter((v) => v != null);
   const avg7 = mean(recent7);
-  if (avg7 == null) return { value: Math.round(cur * 10) / 10, unit: "CTL", label: "Holding", status: "watch" };
+  const val = Math.round(cur * 10) / 10;
+  const ref = avg7 != null ? `vs 7d avg ${avg7.toFixed(1)}` : "no 7d avg";
+  if (avg7 == null) return { value: val, unit: "CTL", label: "Holding", status: "watch", ref };
   const diff = cur - avg7;
-  if (diff > 0.3) return { value: Math.round(cur * 10) / 10, unit: "CTL", label: "Trending up", status: "good" };
-  if (diff < -0.3) return { value: Math.round(cur * 10) / 10, unit: "CTL", label: "Declining", status: "bad" };
-  return { value: Math.round(cur * 10) / 10, unit: "CTL", label: "Plateau", status: "watch" };
+  if (diff > 0.3) return { value: val, unit: "CTL", label: "Trending up", status: "good", ref };
+  if (diff < -0.3) return { value: val, unit: "CTL", label: "Declining", status: "bad", ref };
+  return { value: val, unit: "CTL", label: "Plateau", status: "watch", ref };
 }
 
 function statusForm(days) {
   const v = days.length ? days[days.length - 1].form : null;
   if (v == null) return null;
+  const ref = "optimal −30 to −10";
   let status = "watch", label;
   if (v >= -30 && v <= -10) { status = "good"; label = "Optimal"; }
   else if (v > -10 && v <= 5) { label = "Grey zone"; }
@@ -300,19 +303,20 @@ function statusForm(days) {
   else if (v > 20 && v <= 50) { label = "Transition"; }
   else if (v > 50) { status = "bad"; label = "Detrained"; }
   else { status = "bad"; label = "High risk"; }
-  return { value: Math.round(v * 10) / 10, unit: "TSB", label, status };
+  return { value: Math.round(v * 10) / 10, unit: "TSB", label, status, ref };
 }
 
 function statusACWR(days) {
   const v = days.length ? days[days.length - 1].acwr : null;
   if (v == null) return null;
+  const ref = "sweet spot 0.8–1.3";
   let status, label;
   if (v >= 0.8 && v <= 1.3) { status = "good"; label = "Optimal"; }
   else if (v > 1.3 && v <= 1.5) { status = "watch"; label = "Elevated"; }
   else if (v >= 0.6 && v < 0.8) { status = "watch"; label = "Low"; }
   else if (v > 1.5) { status = "bad"; label = "High risk"; }
   else { status = "bad"; label = "Detrained"; }
-  return { value: v.toFixed(2), unit: "", label, status };
+  return { value: v.toFixed(2), unit: "", label, status, ref };
 }
 
 function statusHRV(days) {
@@ -322,10 +326,11 @@ function statusHRV(days) {
   const older = days.slice(0, -7).map((d) => d.hrvRaw).filter((v) => v != null);
   const baseline = mean(older);
   const val = Math.round(cur7);
-  if (baseline == null) return { value: val, unit: "ms", label: "Insufficient history", status: "watch" };
-  if (cur7 >= baseline) return { value: val, unit: "ms", label: "Above baseline", status: "good" };
-  if (cur7 >= baseline * 0.95) return { value: val, unit: "ms", label: "Near baseline", status: "watch" };
-  return { value: val, unit: "ms", label: "Below baseline", status: "bad" };
+  const ref = baseline != null ? `baseline ${Math.round(baseline)} ms` : "no baseline";
+  if (baseline == null) return { value: val, unit: "ms", label: "Insufficient history", status: "watch", ref };
+  if (cur7 >= baseline) return { value: val, unit: "ms", label: "Above baseline", status: "good", ref };
+  if (cur7 >= baseline * 0.95) return { value: val, unit: "ms", label: "Near baseline", status: "watch", ref };
+  return { value: val, unit: "ms", label: "Below baseline", status: "bad", ref };
 }
 
 function statusRHR(days) {
@@ -335,10 +340,11 @@ function statusRHR(days) {
   const older = days.slice(0, -7).map((d) => d.rhrRaw).filter((v) => v != null);
   const baseline = mean(older);
   const val = Math.round(cur7);
-  if (baseline == null) return { value: val, unit: "bpm", label: "Insufficient history", status: "watch" };
-  if (cur7 <= baseline) return { value: val, unit: "bpm", label: "Below baseline", status: "good" };
-  if (cur7 <= baseline + 3) return { value: val, unit: "bpm", label: "Near baseline", status: "watch" };
-  return { value: val, unit: "bpm", label: "Elevated", status: "bad" };
+  const ref = baseline != null ? `baseline ${Math.round(baseline)} bpm` : "no baseline";
+  if (baseline == null) return { value: val, unit: "bpm", label: "Insufficient history", status: "watch", ref };
+  if (cur7 <= baseline) return { value: val, unit: "bpm", label: "Below baseline", status: "good", ref };
+  if (cur7 <= baseline + 3) return { value: val, unit: "bpm", label: "Near baseline", status: "watch", ref };
+  return { value: val, unit: "bpm", label: "Elevated", status: "bad", ref };
 }
 
 function statusAE(sessions) {
@@ -347,9 +353,10 @@ function statusAE(sessions) {
   const last3 = mean(efs.slice(-3));
   const last8 = mean(efs.slice(-Math.min(8, efs.length)));
   const val = last3.toFixed(2);
-  if (last3 > last8 + 0.02) return { value: val, unit: "run", label: "Improving", status: "good" };
-  if (last3 < last8 - 0.02) return { value: val, unit: "run", label: "Declining", status: "bad" };
-  return { value: val, unit: "run", label: "Steady", status: "watch" };
+  const ref = `8-sess avg ${last8.toFixed(2)}`;
+  if (last3 > last8 + 0.02) return { value: val, unit: "run", label: "Improving", status: "good", ref };
+  if (last3 < last8 - 0.02) return { value: val, unit: "run", label: "Declining", status: "bad", ref };
+  return { value: val, unit: "run", label: "Steady", status: "watch", ref };
 }
 
 function statusSleep(days) {
@@ -357,9 +364,10 @@ function statusSleep(days) {
   const cur7 = mean(recent);
   if (cur7 == null) return null;
   const val = cur7.toFixed(1);
-  if (cur7 >= 7.5) return { value: val, unit: "h", label: "Good", status: "good" };
-  if (cur7 >= 7.0) return { value: val, unit: "h", label: "Suboptimal", status: "watch" };
-  return { value: val, unit: "h", label: "Bad", status: "bad" };
+  const ref = "target ≥ 7.5h";
+  if (cur7 >= 7.5) return { value: val, unit: "h", label: "Good", status: "good", ref };
+  if (cur7 >= 7.0) return { value: val, unit: "h", label: "Suboptimal", status: "watch", ref };
+  return { value: val, unit: "h", label: "Bad", status: "bad", ref };
 }
 
 const STATUS_COLOR = { good: C.green, watch: C.amber, bad: C.red };
@@ -369,20 +377,21 @@ const StatusTile = ({ title, info }) => {
   return html`<div style=${{
       background: C.card,
       border: "1px solid " + C.border,
-      borderLeft: "4px solid " + col,
-      borderRadius: 12,
-    }} className="px-4 py-3">
-    <div style=${{ color: C.muted, letterSpacing: "0.15em" }} className="text-[10px] font-semibold uppercase">${title}</div>
+      borderLeft: "3px solid " + col,
+      borderRadius: 10,
+    }} className="px-3 py-2">
+    <div style=${{ color: C.muted, letterSpacing: "0.12em" }} className="text-[8px] font-semibold uppercase">${title}</div>
     ${info ? [
-      html`<div key="v" className="flex items-baseline gap-2 mt-1">
-        <span className="text-3xl font-bold">${info.value}</span>
-        ${info.unit ? html`<span style=${{ color: C.muted }} className="text-xs">${info.unit}</span>` : null}
+      html`<div key="v" className="flex items-baseline gap-1.5 mt-0.5">
+        <span className="text-2xl font-bold leading-none">${info.value}</span>
+        ${info.unit ? html`<span style=${{ color: C.muted }} className="text-[10px]">${info.unit}</span>` : null}
       </div>`,
-      html`<div key="l" className="flex items-center gap-1.5 mt-1">
-        <span style=${{ color: col }}>●</span>
-        <span style=${{ color: col }} className="text-sm">${info.label}</span>
+      html`<div key="l" className="flex items-center gap-1 mt-1">
+        <span style=${{ color: col, fontSize: 8 }}>●</span>
+        <span style=${{ color: col }} className="text-[11px]">${info.label}</span>
       </div>`,
-    ] : html`<div style=${{ color: C.muted }} className="text-sm mt-3">No data yet</div>`}
+      info.ref ? html`<div key="r" style=${{ color: C.muted }} className="text-[10px] mt-0.5">${info.ref}</div>` : null,
+    ] : html`<div style=${{ color: C.muted }} className="text-xs mt-2">No data yet</div>`}
   </div>`;
 };
 
@@ -503,7 +512,7 @@ function App() {
         <${Pills} options=${["3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
         <${StatusTile} title="Fitness"             info=${statusFitness(DAYS)} />
         <${StatusTile} title="Form"                info=${statusForm(DAYS)} />
         <${StatusTile} title="ACWR"                info=${statusACWR(DAYS)} />
