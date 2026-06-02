@@ -264,6 +264,128 @@ const ZoneTT = ({ active, payload, label }) => {
   </div>`;
 };
 
+// ---------- status tiles ----------
+// Each statusXxx() reads the current dataset and returns
+// { value, unit, label, status: "good"|"watch"|"bad" } — null if there's
+// not enough data to score. Rules per Kevin's spec:
+//
+//   Fitness    — CTL > 7d moving avg → trending up = good
+//   Form       — green only when -30 to -10 (Optimal zone)
+//   ACWR       — sweet spot 0.8-1.3 = good; 1.3-1.5 or 0.7-0.8 = watch; else bad
+//   Aerobic EF — mean(last 3 sessions) > mean(last 8) = improving
+//   HRV 7d     — vs the longer-term average (not a ±σ band)
+//   Resting HR — same but lower is better
+//   Sleep 7d   — ≥7.5 good · 7-7.5 watch · <7 bad
+const mean = (arr) => arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null;
+
+function statusFitness(days) {
+  const cur = days.length ? days[days.length - 1].fitness : null;
+  if (cur == null) return null;
+  const recent7 = days.slice(-8, -1).map((d) => d.fitness).filter((v) => v != null);
+  const avg7 = mean(recent7);
+  if (avg7 == null) return { value: Math.round(cur * 10) / 10, unit: "CTL", label: "Holding", status: "watch" };
+  const diff = cur - avg7;
+  if (diff > 0.3) return { value: Math.round(cur * 10) / 10, unit: "CTL", label: "Trending up", status: "good" };
+  if (diff < -0.3) return { value: Math.round(cur * 10) / 10, unit: "CTL", label: "Declining", status: "bad" };
+  return { value: Math.round(cur * 10) / 10, unit: "CTL", label: "Plateau", status: "watch" };
+}
+
+function statusForm(days) {
+  const v = days.length ? days[days.length - 1].form : null;
+  if (v == null) return null;
+  let status = "watch", label;
+  if (v >= -30 && v <= -10) { status = "good"; label = "Optimal"; }
+  else if (v > -10 && v <= 5) { label = "Grey zone"; }
+  else if (v > 5 && v <= 20) { label = "Fresh"; }
+  else if (v > 20 && v <= 50) { label = "Transition"; }
+  else if (v > 50) { status = "bad"; label = "Detrained"; }
+  else { status = "bad"; label = "High risk"; }
+  return { value: Math.round(v * 10) / 10, unit: "TSB", label, status };
+}
+
+function statusACWR(days) {
+  const v = days.length ? days[days.length - 1].acwr : null;
+  if (v == null) return null;
+  let status, label;
+  if (v >= 0.8 && v <= 1.3) { status = "good"; label = "Optimal"; }
+  else if (v > 1.3 && v <= 1.5) { status = "watch"; label = "Elevated"; }
+  else if (v >= 0.6 && v < 0.8) { status = "watch"; label = "Low"; }
+  else if (v > 1.5) { status = "bad"; label = "High risk"; }
+  else { status = "bad"; label = "Detrained"; }
+  return { value: v.toFixed(2), unit: "", label, status };
+}
+
+function statusHRV(days) {
+  const recent = days.slice(-7).map((d) => d.hrvRaw).filter((v) => v != null);
+  const cur7 = mean(recent);
+  if (cur7 == null) return null;
+  const older = days.slice(0, -7).map((d) => d.hrvRaw).filter((v) => v != null);
+  const baseline = mean(older);
+  const val = Math.round(cur7);
+  if (baseline == null) return { value: val, unit: "ms", label: "Insufficient history", status: "watch" };
+  if (cur7 >= baseline) return { value: val, unit: "ms", label: "Above baseline", status: "good" };
+  if (cur7 >= baseline * 0.95) return { value: val, unit: "ms", label: "Near baseline", status: "watch" };
+  return { value: val, unit: "ms", label: "Below baseline", status: "bad" };
+}
+
+function statusRHR(days) {
+  const recent = days.slice(-7).map((d) => d.rhrRaw).filter((v) => v != null);
+  const cur7 = mean(recent);
+  if (cur7 == null) return null;
+  const older = days.slice(0, -7).map((d) => d.rhrRaw).filter((v) => v != null);
+  const baseline = mean(older);
+  const val = Math.round(cur7);
+  if (baseline == null) return { value: val, unit: "bpm", label: "Insufficient history", status: "watch" };
+  if (cur7 <= baseline) return { value: val, unit: "bpm", label: "Below baseline", status: "good" };
+  if (cur7 <= baseline + 3) return { value: val, unit: "bpm", label: "Near baseline", status: "watch" };
+  return { value: val, unit: "bpm", label: "Elevated", status: "bad" };
+}
+
+function statusAE(sessions) {
+  const efs = sessions.map((s) => s.ef).filter((v) => v != null);
+  if (efs.length < 3) return null;
+  const last3 = mean(efs.slice(-3));
+  const last8 = mean(efs.slice(-Math.min(8, efs.length)));
+  const val = last3.toFixed(2);
+  if (last3 > last8 + 0.02) return { value: val, unit: "run", label: "Improving", status: "good" };
+  if (last3 < last8 - 0.02) return { value: val, unit: "run", label: "Declining", status: "bad" };
+  return { value: val, unit: "run", label: "Steady", status: "watch" };
+}
+
+function statusSleep(days) {
+  const recent = days.slice(-7).map((d) => d.sleep).filter((v) => v != null);
+  const cur7 = mean(recent);
+  if (cur7 == null) return null;
+  const val = cur7.toFixed(1);
+  if (cur7 >= 7.5) return { value: val, unit: "h", label: "Good", status: "good" };
+  if (cur7 >= 7.0) return { value: val, unit: "h", label: "Suboptimal", status: "watch" };
+  return { value: val, unit: "h", label: "Bad", status: "bad" };
+}
+
+const STATUS_COLOR = { good: C.green, watch: C.amber, bad: C.red };
+
+const StatusTile = ({ title, info }) => {
+  const col = info ? STATUS_COLOR[info.status] : C.muted;
+  return html`<div style=${{
+      background: C.card,
+      border: "1px solid " + C.border,
+      borderLeft: "4px solid " + col,
+      borderRadius: 12,
+    }} className="px-4 py-3">
+    <div style=${{ color: C.muted, letterSpacing: "0.15em" }} className="text-[10px] font-semibold uppercase">${title}</div>
+    ${info ? [
+      html`<div key="v" className="flex items-baseline gap-2 mt-1">
+        <span className="text-3xl font-bold">${info.value}</span>
+        ${info.unit ? html`<span style=${{ color: C.muted }} className="text-xs">${info.unit}</span>` : null}
+      </div>`,
+      html`<div key="l" className="flex items-center gap-1.5 mt-1">
+        <span style=${{ color: col }}>●</span>
+        <span style=${{ color: col }} className="text-sm">${info.label}</span>
+      </div>`,
+    ] : html`<div style=${{ color: C.muted }} className="text-sm mt-3">No data yet</div>`}
+  </div>`;
+};
+
 // ---------- main ----------
 function App() {
   const [range, setRange] = useState("6M");
@@ -381,11 +503,19 @@ function App() {
         <${Pills} options=${["3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
       </div>
 
-      <div className="flex flex-wrap gap-3 mb-4">
-        ${stat("Fitness (CTL)", cur.fitness != null ? cur.fitness : "—", C.cyan)}
-        ${stat("Fatigue (ATL)", cur.fatigue != null ? cur.fatigue : "—", C.violet)}
-        ${stat("Form (TSB)", cur.form != null ? cur.form : "—", cur.form != null ? (cur.form < -30 ? C.red : cur.form < -10 ? C.green : C.muted) : C.muted)}
-        ${stat("ACWR", cur.acwr != null ? cur.acwr.toFixed(2) : "—", cur.acwr > 1.5 ? C.red : cur.acwr >= 0.8 ? C.green : C.cyan)}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
+        <${StatusTile} title="Fitness"             info=${statusFitness(DAYS)} />
+        <${StatusTile} title="Form"                info=${statusForm(DAYS)} />
+        <${StatusTile} title="ACWR"                info=${statusACWR(DAYS)} />
+        <${StatusTile} title="Aerobic Eff."        info=${statusAE(AE_SESSIONS)} />
+        <${StatusTile} title="HRV (7d avg)"        info=${statusHRV(DAYS)} />
+        <${StatusTile} title="Resting HR (7d avg)" info=${statusRHR(DAYS)} />
+        <${StatusTile} title="Sleep (7d avg)"      info=${statusSleep(DAYS)} />
+      </div>
+      <div className="flex flex-wrap gap-4 mb-5 text-[11px]" style=${{ color: C.muted }}>
+        <span><span style=${{ color: C.green }}>●</span> Healthy</span>
+        <span><span style=${{ color: C.amber }}>●</span> Watch / suboptimal</span>
+        <span><span style=${{ color: C.red }}>●</span> Needs attention</span>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 md:gap-x-4">
