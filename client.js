@@ -557,15 +557,27 @@ function App() {
   const todayStr = today.getDate() + " " + MON[today.getMonth()] + " " + today.getFullYear();
 
   return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-2 sm:p-6">
+    <!-- Desktop: floating vertical range selector pinned to the left edge -->
+    <div className="hidden sm:flex fixed left-3 top-1/2 -translate-y-1/2 flex-col gap-2 z-10">
+      ${["3M", "6M", "1Y", "2Y", "All"].map((o) => {
+        const on = o === range;
+        return html`<button key=${o} onClick=${() => onRange(o)}
+          style=${{
+            background: on ? C.cyan : C.card,
+            color: on ? "#06212a" : C.muted,
+            border: "1px solid " + (on ? C.cyan : C.border),
+            minWidth: 52,
+          }}
+          className="px-3 py-2 rounded-full text-xs font-semibold transition-colors shadow-md">${o}</button>`;
+      })}
+    </div>
+
     <div className="max-w-7xl mx-auto">
       <div className="flex items-end justify-between flex-wrap gap-3 mb-5">
         <div>
           <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Training Overview</div>
           <h1 className="text-2xl font-bold mt-1">Long-Term Trends</h1>
           <div style=${{ color: C.muted }} className="text-xs mt-1">${todayStr}</div>
-        </div>
-        <div className="hidden sm:block">
-          <${Pills} options=${["3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
         </div>
       </div>
 
