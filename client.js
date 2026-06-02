@@ -512,7 +512,9 @@ function App() {
           <h1 className="text-2xl font-bold mt-1">Long-Term Trends</h1>
           <div style=${{ color: C.muted }} className="text-xs mt-1">${todayStr}</div>
         </div>
-        <${Pills} options=${["3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
+        <div className="hidden sm:block">
+          <${Pills} options=${["3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
@@ -524,10 +526,13 @@ function App() {
         <${StatusTile} title="Resting HR (7d avg)" info=${statusRHR(DAYS)} />
         <${StatusTile} title="Sleep (7d avg)"      info=${statusSleep(DAYS)} />
       </div>
-      <div className="flex flex-wrap gap-4 mb-5 text-[11px]" style=${{ color: C.muted }}>
+      <div className="flex flex-wrap gap-4 mb-3 text-[11px]" style=${{ color: C.muted }}>
         <span><span style=${{ color: C.green }}>●</span> Healthy</span>
         <span><span style=${{ color: C.amber }}>●</span> Watch / suboptimal</span>
         <span><span style=${{ color: C.red }}>●</span> Needs attention</span>
+      </div>
+      <div className="sm:hidden mb-4">
+        <${Pills} options=${["3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 md:gap-x-4">
