@@ -404,6 +404,7 @@ function App() {
   const [sport, setSport] = useState("All");
   const [metric, setMetric] = useState("Load");
   const [showRaw, setShowRaw] = useState(false);
+  const [loadView, setLoadView] = useState("Acute load"); // "Acute load" | "Ratio"
 
   // Races: persisted to localStorage so they survive reloads / re-tokens.
   const [races, setRaces] = useState(loadRaces);
@@ -502,6 +503,32 @@ function App() {
     if (!v.length) return [1, 3];
     return [Math.floor((Math.min(...v) - 0.1) * 20) / 20, Math.ceil((Math.max(...v) + 0.1) * 20) / 20];
   })();
+
+  // Acute-load series: ATL line + an "optimal" band that floats at
+  // 0.8–1.3 × the current chronic load (CTL). Same 0.8–1.3 thresholds as
+  // the ratio view — Gabbett / Banister ACWR research — just visualised
+  // in absolute load units instead of as a ratio.
+  const acuteSeries = useMemo(() => view.map((d) => {
+    const ctl = d.fitness, atl = d.fatigue;
+    if (ctl == null || ctl <= 0 || atl == null) {
+      return { label: d.label, atl: null, ctl: null, optimal: null };
+    }
+    return {
+      label: d.label,
+      atl: r1(atl),
+      ctl: r1(ctl),
+      optimal: [r1(0.8 * ctl), r1(1.3 * ctl)],
+    };
+  }), [view]);
+  const acuteDomain = useMemo(() => {
+    const vals = [];
+    for (const s of acuteSeries) {
+      if (s.atl != null) vals.push(s.atl);
+      if (s.optimal) { vals.push(s.optimal[0]); vals.push(s.optimal[1]); }
+    }
+    if (!vals.length) return [0, 80];
+    return [Math.max(0, Math.floor(Math.min(...vals) - 5)), Math.ceil(Math.max(...vals) + 5)];
+  }, [acuteSeries]);
 
   const rhrSeries = useMemo(() => view.map((d) => ({ label: d.label, rhr: d.rhr })), [view]);
   const rhrDomain = useMemo(() => {
@@ -613,22 +640,41 @@ function App() {
           </div>
         <//>
 
-        <${Card} title="Acute : Chronic Load Ratio" sub="Sweet spot 0.8–1.3">
-          <${ResponsiveContainer} width="100%" height=${220}>
-            <${LineChart} data=${view} margin=${topMargin}>
-              <${ReferenceArea} y1=${1.5} y2=${2.2} fill=${C.red} fillOpacity=${0.10} />
-              <${ReferenceArea} y1=${1.3} y2=${1.5} fill=${C.amber} fillOpacity=${0.08} />
-              <${ReferenceArea} y1=${0.8} y2=${1.3} fill=${C.green} fillOpacity=${0.10} />
-              <${ReferenceArea} y1=${0} y2=${0.8} fill=${C.cyan} fillOpacity=${0.06} />
-              <${CartesianGrid} stroke=${C.grid} vertical=${false} />
-              <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
-              <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[0, 2]} />
-              <${Tooltip} content=${h(TT, { fmt: (v) => v.toFixed(2) })} />
-              ${yearLines(view)}
-              ${raceLines(view, races)}
-              <${Line} type="monotone" dataKey="acwr" name="ACWR" stroke=${C.cyan} strokeWidth=${1.8} dot=${false} />
-            <//>
-          <//>
+        <${Card}
+          title=${loadView === "Acute load" ? "Acute Load" : "Acute : Chronic Load Ratio"}
+          sub=${loadView === "Acute load"
+            ? "ATL (7-day EWMA) vs your current chronic load. Green band = 0.8–1.3 × CTL — the same sweet spot, expressed in absolute units."
+            : "Acute load ÷ chronic load. Sweet spot 0.8–1.3."}
+          right=${html`<${Pills} options=${["Acute load", "Ratio"]} value=${loadView} onChange=${setLoadView} />`}>
+          ${loadView === "Acute load"
+            ? html`<${ResponsiveContainer} width="100%" height=${220}>
+                <${ComposedChart} data=${acuteSeries} margin=${topMargin}>
+                  <${CartesianGrid} stroke=${C.grid} vertical=${false} />
+                  <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
+                  <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${acuteDomain} />
+                  <${Tooltip} content=${h(TT, { fmt: (v) => Math.round(v) })} />
+                  ${yearLines(view)}
+                  ${raceLines(view, races)}
+                  <${Area} type="monotone" dataKey="optimal" name="Optimal (0.8–1.3 × CTL)" stroke="none" fill=${C.green} fillOpacity=${0.15} connectNulls=${true} isAnimationActive=${false} />
+                  <${Line} type="monotone" dataKey="ctl" name="Chronic load (CTL)" stroke=${C.muted} strokeWidth=${1} strokeDasharray="3 3" dot=${false} connectNulls=${true} />
+                  <${Line} type="monotone" dataKey="atl" name="Acute load (ATL)" stroke=${C.cyan} strokeWidth=${1.8} dot=${false} connectNulls=${true} />
+                <//>
+              <//>`
+            : html`<${ResponsiveContainer} width="100%" height=${220}>
+                <${LineChart} data=${view} margin=${topMargin}>
+                  <${ReferenceArea} y1=${1.5} y2=${2.2} fill=${C.red} fillOpacity=${0.10} />
+                  <${ReferenceArea} y1=${1.3} y2=${1.5} fill=${C.amber} fillOpacity=${0.08} />
+                  <${ReferenceArea} y1=${0.8} y2=${1.3} fill=${C.green} fillOpacity=${0.10} />
+                  <${ReferenceArea} y1=${0} y2=${0.8} fill=${C.cyan} fillOpacity=${0.06} />
+                  <${CartesianGrid} stroke=${C.grid} vertical=${false} />
+                  <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
+                  <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[0, 2]} />
+                  <${Tooltip} content=${h(TT, { fmt: (v) => v.toFixed(2) })} />
+                  ${yearLines(view)}
+                  ${raceLines(view, races)}
+                  <${Line} type="monotone" dataKey="acwr" name="ACWR" stroke=${C.cyan} strokeWidth=${1.8} dot=${false} />
+                <//>
+              <//>`}
         <//>
 
         <${Card} title="Aerobic Efficiency" sub="Run · pace-per-heartbeat (adjusted for temp/humidity/elevation) · higher = fitter aerobic engine">
