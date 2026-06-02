@@ -457,18 +457,43 @@ function App() {
     return { label: b.label, sleep: vals.length ? r1(vals.reduce((s, x) => s + x, 0) / vals.length) : 0 };
   }), [sleepBuckets]);
 
-  const hrvSeries = useMemo(() => view.map((d) => ({ label: d.label, hrv: d.hrv, raw: d.hrvRaw != null ? r1(d.hrvRaw) : null })), [view]);
-  const hrvBand = useMemo(() => {
-    const v = hrvSeries.map((x) => x.hrv).filter((x) => x != null);
-    if (!v.length) return { low: 0, high: 100 };
-    const m = v.reduce((s, x) => s + x, 0) / v.length;
-    const sd = Math.sqrt(v.reduce((s, x) => s + (x - m) ** 2, 0) / v.length);
-    return { low: r1(m - sd), high: r1(m + sd) };
-  }, [hrvSeries]);
+  // HRV series — value is the 7-day rolling avg of nightly HRV. Band is a
+  // PERSONAL baseline that moves day-by-day: trailing-60-day mean of
+  // nightly HRV ± 1σ. This matches the methodology Garmin / HRV4Training /
+  // Marco Altini use ("baseline" range), where the band is computed from
+  // the user's own history rather than population norms.
+  const HRV_BASELINE_DAYS = 60;
+  const HRV_MIN_WINDOW = 14;
+  const hrvSeries = useMemo(() => {
+    const startIdx = Math.max(0, DAYS.length - nDays);
+    return view.map((d, i) => {
+      const absIdx = startIdx + i;
+      const winStart = Math.max(0, absIdx - (HRV_BASELINE_DAYS - 1));
+      const win = DAYS.slice(winStart, absIdx + 1)
+        .map((x) => x.hrvRaw).filter((v) => v != null);
+      let band = null;
+      if (win.length >= HRV_MIN_WINDOW) {
+        const m = win.reduce((s, x) => s + x, 0) / win.length;
+        const sd = Math.sqrt(win.reduce((s, x) => s + (x - m) ** 2, 0) / win.length);
+        band = [r1(m - sd), r1(m + sd)];
+      }
+      return {
+        label: d.label,
+        hrv: d.hrv,
+        raw: d.hrvRaw != null ? r1(d.hrvRaw) : null,
+        band,
+      };
+    });
+  }, [view, nDays]);
   const hrvDomain = useMemo(() => {
-    const v = hrvSeries.map((x) => x.hrv).filter((x) => x != null).concat(showRaw ? hrvSeries.map((x) => x.raw).filter((x) => x != null) : []);
-    if (!v.length) return [0, 100];
-    return [Math.floor(Math.min(...v) - 6), Math.ceil(Math.max(...v) + 6)];
+    const vals = [];
+    for (const s of hrvSeries) {
+      if (s.hrv != null) vals.push(s.hrv);
+      if (showRaw && s.raw != null) vals.push(s.raw);
+      if (s.band) { vals.push(s.band[0]); vals.push(s.band[1]); }
+    }
+    if (!vals.length) return [0, 100];
+    return [Math.floor(Math.min(...vals) - 6), Math.ceil(Math.max(...vals) + 6)];
   }, [hrvSeries, showRaw]);
 
   const efSeries = AE_SESSIONS.map((s) => ({ label: fmtDate(s.date), session: s.ef, trend: s.trend, date: s.date }));
@@ -681,19 +706,19 @@ function App() {
           <//>
         <//>
 
-        <${Card} title=${"HRV Trend · " + range} sub=${"Daily 7-day rolling avg · normal band " + hrvBand.low + "–" + hrvBand.high + " ms"}
+        <${Card} title=${"HRV Trend · " + range} sub="7-day rolling avg · shaded band = your trailing 60-day mean ± 1σ (personal baseline)"
           right=${html`<button onClick=${() => setShowRaw((s) => !s)}
             style=${{ background: showRaw ? C.muted : "transparent", color: showRaw ? "#0a0d12" : C.muted, border: "1px solid " + (showRaw ? C.muted : C.border), borderRadius: 999 }}
             className="px-3 py-1 text-xs font-semibold">Overnight values</button>`}>
           <${ResponsiveContainer} width="100%" height=${220}>
-            <${LineChart} data=${hrvSeries} margin=${topMargin}>
-              <${ReferenceArea} y1=${hrvBand.low} y2=${hrvBand.high} fill=${C.muted} fillOpacity=${0.13} />
+            <${ComposedChart} data=${hrvSeries} margin=${topMargin}>
               <${CartesianGrid} stroke=${C.grid} vertical=${false} />
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${hrvDomain} />
               <${Tooltip} content=${h(TT, { fmt: (v) => v + " ms" })} />
               ${yearLines(view)}
               ${raceLines(view, races)}
+              <${Area} type="monotone" dataKey="band" name="Normal range" stroke="none" fill=${C.muted} fillOpacity=${0.18} connectNulls=${true} isAnimationActive=${false} />
               ${showRaw ? html`<${Line} type="monotone" dataKey="raw" name="Overnight" stroke="#9aa6b6" strokeWidth=${1} strokeDasharray="2 3" strokeOpacity=${0.7} dot=${false} isAnimationActive=${false} connectNulls=${true} />` : null}
               <${Line} type="monotone" dataKey="hrv" name="7-day avg" stroke=${C.green} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
