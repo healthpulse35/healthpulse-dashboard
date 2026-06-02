@@ -465,6 +465,10 @@ function App() {
   // the user's own history rather than population norms.
   const HRV_BASELINE_DAYS = 60;
   const HRV_MIN_WINDOW = 14;
+  // Half-width of the band in σ units. ±1σ covers ~68% of nightly
+  // readings, which felt visually too wide; ±0.7σ covers ~52% and
+  // narrows the band ~30% while still reflecting normal variation.
+  const HRV_BAND_SIGMA = 0.7;
   const hrvSeries = useMemo(() => {
     const startIdx = Math.max(0, DAYS.length - nDays);
     return view.map((d, i) => {
@@ -476,7 +480,7 @@ function App() {
       if (win.length >= HRV_MIN_WINDOW) {
         const m = win.reduce((s, x) => s + x, 0) / win.length;
         const sd = Math.sqrt(win.reduce((s, x) => s + (x - m) ** 2, 0) / win.length);
-        band = [r1(m - sd), r1(m + sd)];
+        band = [r1(m - HRV_BAND_SIGMA * sd), r1(m + HRV_BAND_SIGMA * sd)];
       }
       return {
         label: d.label,
@@ -764,7 +768,7 @@ function App() {
           <//>
         <//>
 
-        <${Card} title=${"HRV Trend · " + range} sub="7-day rolling avg · shaded band = your trailing 60-day mean ± 1σ (personal baseline)"
+        <${Card} title=${"HRV Trend · " + range} sub="7-day rolling avg · shaded band = your trailing 60-day mean ± 0.7σ (personal baseline)"
           right=${html`<button onClick=${() => setShowRaw((s) => !s)}
             style=${{ background: showRaw ? C.muted : "transparent", color: showRaw ? "#0a0d12" : C.muted, border: "1px solid " + (showRaw ? C.muted : C.border), borderRadius: 999 }}
             className="px-3 py-1 text-xs font-semibold">Overnight values</button>`}>
