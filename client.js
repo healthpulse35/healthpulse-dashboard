@@ -617,9 +617,8 @@ function App() {
           </div>
         <//>
 
-        <${Card} title="Training Volume" sub=${totLabel(volGran) + " · " + sport + " · " + metric.toLowerCase()}
+        <${Card} title="Training Volume" sub=${totLabel(volGran) + " · all sports · " + metric.toLowerCase()}
           right=${html`<div className="flex flex-col items-end gap-2">
-            <${Pills} options=${["All", ...SPORTS]} value=${sport} onChange=${setSport} />
             <${Pills} options=${["Load", "Distance", "Time"]} value=${metric} onChange=${setMetric} />
             <${Pills} options=${granOpts[range]} value=${volGran} onChange=${setVolGran} />
           </div>`}>
