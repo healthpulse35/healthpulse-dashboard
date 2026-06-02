@@ -221,7 +221,7 @@ function saveRaces(races) {
 
 // ---------- ui primitives ----------
 const Card = ({ title, sub, right, children }) =>
-  html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5 mb-4">
+  html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-3 sm:p-5 mb-4">
     <div className="flex items-start justify-between mb-4 gap-3">
       <div>
         <div style=${{ color: C.muted, letterSpacing: "0.13em" }} className="text-xs font-semibold uppercase">${title}</div>
@@ -490,7 +490,10 @@ function App() {
   const barColor = sport === "All" ? C.cyan : sportColor[sport];
   const sleepColor = (v) => (v >= 7.5 ? C.green : v >= 6.5 ? C.amber : C.red);
   const totLabel = (g) => (g === "Daily" ? "Daily" : g + " totals");
-  const topMargin = { top: 16, right: 8, left: -10, bottom: 0 };
+  // Chart margins: pull both sides in tight. Left is negative to absorb
+  // the Y-axis label gutter; right is 0 since there's no right axis to
+  // make room for.
+  const topMargin = { top: 16, right: 0, left: -12, bottom: 0 };
 
   const stat = (label, value, color) =>
     html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 12 }} className="px-4 py-3 flex-1 min-w-[110px]">
@@ -501,7 +504,7 @@ function App() {
   const today = new Date();
   const todayStr = today.getDate() + " " + MON[today.getMonth()] + " " + today.getFullYear();
 
-  return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-4 sm:p-6">
+  return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-2 sm:p-6">
     <div className="max-w-7xl mx-auto">
       <div className="flex items-end justify-between flex-wrap gap-3 mb-5">
         <div>
