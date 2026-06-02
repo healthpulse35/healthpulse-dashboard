@@ -320,17 +320,29 @@ function statusACWR(days) {
 }
 
 function statusHRV(days) {
-  const recent = days.slice(-7).map((d) => d.hrvRaw).filter((v) => v != null);
-  const cur7 = mean(recent);
-  if (cur7 == null) return null;
-  const older = days.slice(0, -7).map((d) => d.hrvRaw).filter((v) => v != null);
-  const baseline = mean(older);
-  const val = Math.round(cur7);
-  const ref = baseline != null ? `baseline ${Math.round(baseline)} ms` : "no baseline";
-  if (baseline == null) return { value: val, unit: "ms", label: "Insufficient history", status: "watch", ref };
-  if (cur7 >= baseline) return { value: val, unit: "ms", label: "Above baseline", status: "good", ref };
-  if (cur7 >= baseline * 0.95) return { value: val, unit: "ms", label: "Near baseline", status: "watch", ref };
-  return { value: val, unit: "ms", label: "Below baseline", status: "bad", ref };
+  // Build the same band the HRV chart shows: trailing-60d mean ± 0.7σ of
+  // nightly HRV. Compare the recent 5-day HRV against that band.
+  const baselineWin = days.slice(-60).map((d) => d.hrvRaw).filter((v) => v != null);
+  if (baselineWin.length < 14) return null;
+  const m = baselineWin.reduce((s, x) => s + x, 0) / baselineWin.length;
+  const sd = Math.sqrt(baselineWin.reduce((s, x) => s + (x - m) ** 2, 0) / baselineWin.length);
+  const lo = m - 0.7 * sd;
+  const hi = m + 0.7 * sd;
+
+  const recentWin = days.slice(-5).map((d) => d.hrvRaw).filter((v) => v != null);
+  const cur5 = recentWin.length ? recentWin.reduce((s, x) => s + x, 0) / recentWin.length : null;
+  if (cur5 == null) return null;
+  const val = Math.round(cur5);
+  const ref = `band ${Math.round(lo)}–${Math.round(hi)} ms`;
+
+  if (cur5 >= lo) {
+    // In the band or above — both healthy per user spec.
+    return { value: val, unit: "ms", label: cur5 > hi ? "Above range" : "In range", status: "good", ref };
+  }
+  if (cur5 >= lo * 0.95) {
+    return { value: val, unit: "ms", label: "Slightly below", status: "watch", ref };
+  }
+  return { value: val, unit: "ms", label: "Below range", status: "bad", ref };
 }
 
 function statusRHR(days) {
@@ -590,7 +602,7 @@ function App() {
         <${StatusTile} title="Form"                info=${statusForm(DAYS)} />
         <${StatusTile} title="ACWR"                info=${statusACWR(DAYS)} />
         <${StatusTile} title="Aerobic Eff."        info=${statusAE(AE_SESSIONS)} />
-        <${StatusTile} title="HRV (7d avg)"        info=${statusHRV(DAYS)} />
+        <${StatusTile} title="HRV (5d avg)"        info=${statusHRV(DAYS)} />
         <${StatusTile} title="Resting HR (7d avg)" info=${statusRHR(DAYS)} />
         <${StatusTile} title="Sleep (7d avg)"      info=${statusSleep(DAYS)} />
       </div>
