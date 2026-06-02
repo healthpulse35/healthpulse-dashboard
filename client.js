@@ -220,11 +220,14 @@ function saveRaces(races) {
 }
 
 // ---------- ui primitives ----------
-const Card = ({ title, sub, right, children }) =>
+const Card = ({ title, sub, right, source, children }) =>
   html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-3 sm:p-5 mb-4">
     <div className="flex items-start justify-between mb-4 gap-3">
       <div>
-        <div style=${{ color: C.muted, letterSpacing: "0.13em" }} className="text-xs font-semibold uppercase">${title}</div>
+        <div
+          title=${source || undefined}
+          style=${{ color: C.muted, letterSpacing: "0.13em", cursor: source ? "help" : "default" }}
+          className="text-xs font-semibold uppercase inline-flex items-center gap-1.5">${title}${source ? html`<span style=${{ color: C.border, fontSize: 10 }}>ⓘ</span>` : null}</div>
         ${sub ? html`<div style=${{ color: C.muted }} className="text-xs mt-1">${sub}</div>` : null}
       </div>
       ${right}
@@ -617,7 +620,9 @@ function App() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 md:gap-x-4">
 
-        <${Card} title="Fitness & Fatigue" sub="Blue = fitness (CTL, 42-day EWMA). Purple = fatigue (ATL, 7-day EWMA). Form = blue − purple.">
+        <${Card} title="Fitness & Fatigue" sub="Blue = fitness (CTL, 42-day EWMA). Purple = fatigue (ATL, 7-day EWMA). Form = blue − purple."
+          source="Source: intervals.icu wellness (Garmin Connect partnership). Days without a wellness row fall back to a local EWMA over Strava training-load.">
+
           <${ResponsiveContainer} width="100%" height=${260}>
             <${ComposedChart} data=${view} margin=${topMargin}>
               <defs>
@@ -641,7 +646,8 @@ function App() {
           </div>
         <//>
 
-        <${Card} title="Form (TSB)" sub="Fitness − Fatigue. Negative = loaded; very negative = high injury risk.">
+        <${Card} title="Form (TSB)" sub="Fitness − Fatigue. Negative = loaded; very negative = high injury risk."
+          source="Source: derived (CTL − ATL). Underlying values come from intervals.icu wellness (Garmin partnership), with Strava-based EWMA fallback on gap days.">
           <${ResponsiveContainer} width="100%" height=${260}>
             <${LineChart} data=${view} margin=${topMargin}>
               <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.06} />
@@ -673,6 +679,7 @@ function App() {
           sub=${loadView === "Acute load"
             ? "ATL (7-day EWMA) vs your current chronic load. Green band = 0.8–1.3 × CTL — the same sweet spot, expressed in absolute units."
             : "Acute load ÷ chronic load. Sweet spot 0.8–1.3."}
+          source="Source: intervals.icu wellness (Garmin Connect partnership). Thresholds (0.8–1.3) from Gabbett / Banister ACWR research."
           right=${html`<${Pills} options=${["Acute load", "Ratio"]} value=${loadView} onChange=${setLoadView} />`}>
           ${loadView === "Acute load"
             ? html`<${ResponsiveContainer} width="100%" height=${220}>
@@ -705,7 +712,8 @@ function App() {
               <//>`}
         <//>
 
-        <${Card} title="Aerobic Efficiency" sub="Run · pace-per-heartbeat (adjusted for temp/humidity/elevation) · higher = fitter aerobic engine">
+        <${Card} title="Aerobic Efficiency" sub="Run · pace-per-heartbeat (adjusted for temp/humidity/elevation) · higher = fitter aerobic engine"
+          source="Source: your Google Sheet (aerobic_efficiency tab). Mirrored daily by GitHub Actions into the aerobic_efficiency table; trend is the 10-session rolling avg of the adjusted EF column.">
           <${ResponsiveContainer} width="100%" height=${220}>
             <${LineChart} data=${efSeries} margin=${topMargin}>
               <${CartesianGrid} stroke=${C.grid} vertical=${false} />
@@ -725,6 +733,7 @@ function App() {
         <//>
 
         <${Card} title="Training Volume" sub=${totLabel(volGran) + " · all sports · " + metric.toLowerCase()}
+          source="Source: Strava activity summaries (duration, distance, sport). Load = Strava-reported training-load with a duration-based fallback for the few activities Strava doesn't carry."
           right=${html`<div className="flex flex-col items-end gap-2">
             <${Pills} options=${["Load", "Distance", "Time"]} value=${metric} onChange=${setMetric} />
             <${Pills} options=${granOpts[range]} value=${volGran} onChange=${setVolGran} />
@@ -743,6 +752,7 @@ function App() {
         <//>
 
         <${Card} title="Time in Training Zones" sub=${totLabel(zoneGran) + " · stacked by HR zone (all sports)"}
+          source="Source: Strava /activities/{id}/zones (per-activity HR-zone distribution). Backfilled into the workouts table; activities without an HR sensor are absent."
           right=${html`<${Pills} options=${granOpts[range]} value=${zoneGran} onChange=${setZoneGran} />`}>
           <${ResponsiveContainer} width="100%" height=${260}>
             <${BarChart} data=${zoneSeries} margin=${topMargin}>
@@ -763,6 +773,7 @@ function App() {
         <//>
 
         <${Card} title="Sleep Duration" sub=${sleepGran === "Daily" ? "Hours per night" : "Average hours per " + (sleepGran === "Weekly" ? "week" : "month")}
+          source="Source: intervals.icu wellness (Garmin Connect partnership) — total sleep seconds. Stage breakdown (deep/REM/light) comes from Apple Health via the HAE Pro webhook, but isn't shown in this chart."
           right=${html`<${Pills} options=${granOpts[range]} value=${sleepGran} onChange=${setSleepGran} />`}>
           <${ResponsiveContainer} width="100%" height=${220}>
             <${BarChart} data=${sleepSeries} margin=${topMargin}>
@@ -781,6 +792,7 @@ function App() {
         <//>
 
         <${Card} title=${"HRV Trend · " + range} sub="7-day rolling avg · shaded band = your trailing 60-day mean ± 0.7σ (personal baseline)"
+          source="Source: intervals.icu wellness (Garmin Connect partnership). Garmin reports nightly RMSSD HRV; we deliberately don't mix Apple Health HRV (which is SDNN) to avoid corrupting the trend."
           right=${html`<button onClick=${() => setShowRaw((s) => !s)}
             style=${{ background: showRaw ? C.muted : "transparent", color: showRaw ? "#0a0d12" : C.muted, border: "1px solid " + (showRaw ? C.muted : C.border), borderRadius: 999 }}
             className="px-3 py-1 text-xs font-semibold">Overnight values</button>`}>
@@ -799,7 +811,8 @@ function App() {
           <//>
         <//>
 
-        <${Card} title=${"Resting Heart Rate · " + range} sub="7-day rolling avg · lower trend = more recovered / fitter">
+        <${Card} title=${"Resting Heart Rate · " + range} sub="7-day rolling avg · lower trend = more recovered / fitter"
+          source="Source: intervals.icu wellness (Garmin Connect partnership) — Garmin's daily lowest 30-min HR.">
           <${ResponsiveContainer} width="100%" height=${220}>
             <${LineChart} data=${rhrSeries} margin=${topMargin}>
               <${CartesianGrid} stroke=${C.grid} vertical=${false} />
@@ -815,7 +828,8 @@ function App() {
 
       </div>
 
-      <${Card} title="Key Races" sub="Amber markers appear on every chart. Stored in this browser only.">
+      <${Card} title="Key Races" sub="Amber markers appear on every chart. Stored in this browser only."
+        source="Source: local browser storage (localStorage key healthpulse_races_v1). Add/remove here; per-device only.">
         <div className="flex flex-wrap gap-2 mb-4">
           <input value=${rName} onChange=${(e) => setRName(e.target.value)} placeholder="Race name (e.g. HYROX Bali)"
             style=${{ background: C.bg, border: "1px solid " + C.border, color: C.text, borderRadius: 8 }}
