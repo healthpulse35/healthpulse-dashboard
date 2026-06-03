@@ -141,11 +141,14 @@ function yearMarkers(series) {
 
 // Vertical reference lines at each year boundary, labelled with the year.
 // Renders directly inside a recharts chart (returns an array of elements).
-function yearLines(series) {
+// Pass `yAxisId` only when the chart explicitly uses non-default axis IDs
+// (e.g. when there's also a right-side Y axis).
+function yearLines(series, yAxisId) {
   return yearMarkers(series).map((m) =>
     h(ReferenceLine, {
       key: "yr" + m.year,
       x: m.label,
+      yAxisId,
       stroke: C.muted,
       strokeDasharray: "2 4",
       strokeOpacity: 0.55,
@@ -182,7 +185,7 @@ function labelForDate(series, raceDate) {
 // Amber dashed reference lines for every visible race in the current chart.
 // Labels are rendered above the chart; multiple races in a small window
 // would overlap, so labels are kept short and we accept that.
-function raceLines(series, races) {
+function raceLines(series, races, yAxisId) {
   return races
     .filter((r) => r.show)
     .map((r) => {
@@ -192,6 +195,7 @@ function raceLines(series, races) {
       return h(ReferenceLine, {
         key: "race" + r.id,
         x,
+        yAxisId,
         stroke: C.amber,
         strokeDasharray: "4 3",
         strokeOpacity: 0.85,
@@ -675,13 +679,13 @@ function App() {
             </defs>
             <${CartesianGrid} stroke=${C.grid} vertical=${false} />
             <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
-            <${YAxis} yAxisId="left" tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
+            <${YAxis} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
             ${FIT_OVERLAYS[fitOverlay] ? html`<${YAxis} yAxisId="right" orientation="right" tick=${{ ...axis, fill: FIT_OVERLAYS[fitOverlay].color }} tickLine=${false} axisLine=${false} width=${42} />` : null}
             <${Tooltip} content=${h(TT)} />
-            ${yearLines(view)}
-            ${raceLines(view, races)}
-            <${Area} yAxisId="left" type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" dot=${false} />
-            <${Line} yAxisId="left" type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
+            ${yearLines(view, FIT_OVERLAYS[fitOverlay] ? "left" : undefined)}
+            ${raceLines(view, races, FIT_OVERLAYS[fitOverlay] ? "left" : undefined)}
+            <${Area} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" dot=${false} />
+            <${Line} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
             ${FIT_OVERLAYS[fitOverlay] ? html`<${Line} yAxisId="right" type="monotone" dataKey=${FIT_OVERLAYS[fitOverlay].key} name=${fitOverlay} stroke=${FIT_OVERLAYS[fitOverlay].color} strokeWidth=${1.6} strokeDasharray="4 3" dot=${false} connectNulls=${true} isAnimationActive=${false} />` : null}
           <//>
         <//>
