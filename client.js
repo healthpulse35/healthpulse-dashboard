@@ -586,6 +586,103 @@ function BiomarkerCard({ b }) {
   </div>`;
 }
 
+// Key markers per category — these get extra weight in the aggregate score.
+// Anything not listed defaults to weight 1. Weights chosen from longevity-
+// medicine literature (e.g. ApoB > LDL > HDL for cardiovascular risk).
+const BIO_CAT_KEY_WEIGHTS = {
+  "Cardiovascular": {
+    "Apo B": 3,
+    "LDL Cholesterol": 2.5,
+    "Non-HDL Cholesterol": 2,
+    "HS-CRP": 2,
+    "Lipoprotein(a)": 1.5,
+    "Triglycerides": 1.2,
+  },
+  "Hormones": {
+    "Free Testosterone": 2.5,
+    "Total Testosterone": 2,
+    "Free Testosterone %": 2,
+    "SHBG": 1.5,
+    "Cortisol - AM": 1.5,
+    "Cortisol : DHEA ratio": 1.5,
+    "Estradiol": 1.2,
+  },
+  "Immune / Blood": {
+    "Neutrophil:Lymphocyte (NLR)": 2,
+    "Lymphocytes": 1.5,
+    "Ferritin": 1.5,
+    "Iron": 1.5,
+    "Hemoglobin": 1.5,
+    "Hematocrit": 1.5,
+    "White Blood Cell (WBC)": 1.5,
+    "Thyroid Stimulating Hormone (TSH)": 1.5,
+    "Free T3": 1.5,
+    "RDW": 1.5,
+  },
+  "Kidney / Liver": {
+    "eGFR": 2,
+    "Creatinine": 1.5,
+    "ALT": 1.5,
+    "GGT": 1.5,
+    "AST": 1.2,
+  },
+  "Metabolic": {
+    "HbA1c": 2.5,
+    "Fasting Blood Glucose (FBG)": 2,
+    "Albumin": 1.5,
+    "TyG index": 1.5,
+    "C-Peptide": 1.2,
+  },
+  "Vitamins": { "Vitamin D": 1.5, "Vitamin B12": 1.5 },
+  "Bone / Minerals": { "Calcium": 1.2, "Phosphorus": 1.2 },
+  "Electrolytes": {},
+};
+
+// Aggregate category score: 50/50 blend of weighted-mean severity and
+// max severity, so a single critical marker drives the label without
+// being averaged away by lots of optimal markers in the same group.
+function categoryScore(items) {
+  if (!items.length) return null;
+  const weights = BIO_CAT_KEY_WEIGHTS[items[0].category] || {};
+  let totalW = 0, weightedSev = 0, maxSev = 0;
+  let worst = null;
+  for (const b of items) {
+    const sev = b.sev || 1;
+    const w = weights[b.name] || 1;
+    totalW += w;
+    weightedSev += sev * w;
+    if (sev > maxSev || (sev === maxSev && w > (weights[worst?.name] || 1))) {
+      maxSev = sev;
+      worst = b;
+    }
+  }
+  const avg = weightedSev / totalW;
+  const score = 0.5 * avg + 0.5 * maxSev;
+  let label, color;
+  if (score < 1.5)      { label = "Optimal";    color = C.green; }
+  else if (score < 2.3) { label = "Watch";      color = C.amber; }
+  else if (score < 3.2) { label = "Concerning"; color = "#fb923c"; }
+  else                  { label = "Critical";   color = C.red; }
+  return { label, color, n: items.length, worst, score };
+}
+
+const CategoryScoreTile = ({ category, info }) => {
+  if (!info) return null;
+  return html`<div style=${{
+      background: C.card,
+      border: "1px solid " + C.border,
+      borderLeft: "3px solid " + info.color,
+      borderRadius: 10,
+    }} className="px-3 py-2">
+    <div style=${{ color: C.muted, letterSpacing: "0.12em" }} className="text-[8px] font-semibold uppercase">${category}</div>
+    <div className="flex items-center gap-1 mt-1">
+      <span style=${{ color: info.color, fontSize: 8 }}>●</span>
+      <span style=${{ color: info.color }} className="text-sm font-semibold">${info.label}</span>
+    </div>
+    <div style=${{ color: C.muted }} className="text-[10px] mt-0.5 truncate">${info.n} markers${info.worst && info.worst.sev >= 2 ? " · worst: " + info.worst.name : ""}</div>
+  </div>`;
+};
+
 function BiomarkersView() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
@@ -625,6 +722,15 @@ function BiomarkersView() {
   const allDates = parsed.flatMap((p) => p.series.map((s) => s.label));
   if (allDates.length) latestStr = allDates[allDates.length - 1];
 
+  // Aggregate per-category scores for the top strip.
+  const byCat = {};
+  for (const p of parsed) (byCat[p.category] ??= []).push(p);
+  const catOrder = ["Cardiovascular", "Metabolic", "Hormones", "Immune / Blood", "Kidney / Liver", "Electrolytes", "Vitamins", "Bone / Minerals"];
+  const knownCats = catOrder.filter((c) => byCat[c]);
+  const unknownCats = Object.keys(byCat).filter((c) => !catOrder.includes(c)).sort();
+  const orderedCats = [...knownCats, ...unknownCats];
+  const catScores = orderedCats.map((c) => ({ category: c, info: categoryScore(byCat[c]) }));
+
   return html`<div>
     <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
       <div>
@@ -636,6 +742,16 @@ function BiomarkersView() {
         <span style=${{ color: C.muted }} className="text-[10px] uppercase font-semibold">Sort by</span>
         <${Pills} options=${["Platform score", "Category"]} value=${sortBy} onChange=${setSortBy} />
       </div>
+    </div>
+
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+      ${catScores.map((cs) => html`<${CategoryScoreTile} key=${cs.category} category=${cs.category} info=${cs.info} />`)}
+    </div>
+    <div className="flex flex-wrap gap-4 mb-4 text-[11px]" style=${{ color: C.muted }}>
+      <span><span style=${{ color: C.green }}>●</span> Optimal</span>
+      <span><span style=${{ color: C.amber }}>●</span> Watch</span>
+      <span><span style=${{ color: "#fb923c" }}>●</span> Concerning</span>
+      <span><span style=${{ color: C.red }}>●</span> Critical</span>
     </div>
 
     <div style=${{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10 }} className="p-3 mb-4 text-xs">
