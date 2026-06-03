@@ -436,16 +436,17 @@ function App() {
   const removeRace = (id) => setRaces((rs) => rs.filter((r) => r.id !== id));
 
   const granOpts = {
+    "1M": ["Daily", "Weekly"],
     "3M": ["Daily", "Weekly"],
     "6M": ["Weekly", "Monthly"],
     "1Y": ["Weekly", "Monthly"],
     "2Y": ["Weekly", "Monthly"],
     "All": ["Monthly"],
   };
-  const granDefault = { "3M": "Weekly", "6M": "Weekly", "1Y": "Monthly", "2Y": "Monthly", "All": "Monthly" };
+  const granDefault = { "1M": "Daily", "3M": "Weekly", "6M": "Weekly", "1Y": "Monthly", "2Y": "Monthly", "All": "Monthly" };
   const onRange = (r) => { setRange(r); const d = granDefault[r]; setVolGran(d); setZoneGran(d); setSleepGran(d); };
 
-  const nDays = { "3M": 90, "6M": 180, "1Y": 365, "2Y": 730, "All": DAYS.length }[range];
+  const nDays = { "1M": 30, "3M": 90, "6M": 180, "1Y": 365, "2Y": 730, "All": DAYS.length }[range];
   const view = DAYS.slice(-nDays);
   const cur = DAYS[DAYS.length - 1] || {};
 
@@ -578,7 +579,7 @@ function App() {
   return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-2 sm:p-6">
     <!-- Desktop: floating vertical range selector pinned to the left edge -->
     <div className="hidden sm:flex fixed left-3 top-1/2 -translate-y-1/2 flex-col gap-2 z-10">
-      ${["3M", "6M", "1Y", "2Y", "All"].map((o) => {
+      ${["1M", "3M", "6M", "1Y", "2Y", "All"].map((o) => {
         const on = o === range;
         return html`<button key=${o} onClick=${() => onRange(o)}
           style=${{
@@ -615,7 +616,7 @@ function App() {
         <span><span style=${{ color: C.red }}>●</span> Needs attention</span>
       </div>
       <div className="sm:hidden mb-4">
-        <${Pills} options=${["3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
+        <${Pills} options=${["1M", "3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 md:gap-x-4">
