@@ -58,19 +58,22 @@ const DAYS = RAW.days.map((d) => {
     sleep: d.sleep,
     hrvRaw: d.hrvRaw,
     rhrRaw: d.rhr,
+    weightRaw: d.weight,
     fitness: d.ctl,
     fatigue: d.atl,
     form: d.tsb,
   };
 });
 
-// 7-day rolling HRV + RHR; ACWR (7d / 28d load ratio)
+// 7-day rolling HRV + RHR + weight; ACWR (7d / 28d load ratio)
 DAYS.forEach((day, i) => {
   const w = DAYS.slice(Math.max(0, i - 6), i + 1);
   const hrvVals = w.map((x) => x.hrvRaw).filter((v) => v != null);
   day.hrv = hrvVals.length ? r1(hrvVals.reduce((s, x) => s + x, 0) / hrvVals.length) : null;
   const rhrVals = w.map((x) => x.rhrRaw).filter((v) => v != null);
   day.rhr = rhrVals.length ? r1(rhrVals.reduce((s, x) => s + x, 0) / rhrVals.length) : null;
+  const wgtVals = w.map((x) => x.weightRaw).filter((v) => v != null);
+  day.weight = wgtVals.length ? r2(wgtVals.reduce((s, x) => s + x, 0) / wgtVals.length) : null;
 
   const a7 = DAYS.slice(Math.max(0, i - 6), i + 1);
   const a28 = DAYS.slice(Math.max(0, i - 27), i + 1);
@@ -419,6 +422,7 @@ function App() {
   const [sport, setSport] = useState("All");
   const [metric, setMetric] = useState("Load");
   const [showRaw, setShowRaw] = useState(false);
+  const [showRawWeight, setShowRawWeight] = useState(false);
   const [loadView, setLoadView] = useState("Acute load"); // "Acute load" | "Ratio"
 
   // Races: persisted to localStorage so they survive reloads / re-tokens.
@@ -556,6 +560,23 @@ function App() {
     if (!v.length) return [40, 70];
     return [Math.floor(Math.min(...v) - 3), Math.ceil(Math.max(...v) + 3)];
   }, [rhrSeries]);
+
+  // Weight: 7-day rolling avg + optional daily values. Mirrors the HRV
+  // chart's "Overnight values" toggle pattern.
+  const weightSeries = useMemo(() => view.map((d) => ({
+    label: d.label,
+    weight: d.weight,
+    raw: d.weightRaw != null ? r2(d.weightRaw) : null,
+  })), [view]);
+  const weightDomain = useMemo(() => {
+    const vals = [];
+    for (const s of weightSeries) {
+      if (s.weight != null) vals.push(s.weight);
+      if (showRawWeight && s.raw != null) vals.push(s.raw);
+    }
+    if (!vals.length) return [70, 85];
+    return [Math.floor(Math.min(...vals) - 1), Math.ceil(Math.max(...vals) + 1)];
+  }, [weightSeries, showRawWeight]);
 
   const metricMeta = { Load: { u: "", f: (v) => Math.round(v) }, Distance: { u: " km", f: (v) => v }, Time: { u: " h", f: (v) => v } };
   const mm = metricMeta[metric];
@@ -838,6 +859,25 @@ function App() {
               ${yearLines(view)}
               ${raceLines(view, races)}
               <${Line} type="monotone" dataKey="rhr" name="Resting HR" stroke=${C.teal} strokeWidth=${2} dot=${false} connectNulls=${true} />
+            <//>
+          <//>
+        <//>
+
+        <${Card} title=${"Weight · " + range} sub="7-day rolling avg smooths daily noise; weigh-ins fill from /weight Telegram command."
+          source="Source: daily_metrics.weight_kg, manually logged via the Telegram /weight command (5-sec entry after weighing in)."
+          right=${html`<button onClick=${() => setShowRawWeight((s) => !s)}
+            style=${{ background: showRawWeight ? C.muted : "transparent", color: showRawWeight ? "#0a0d12" : C.muted, border: "1px solid " + (showRawWeight ? C.muted : C.border), borderRadius: 999 }}
+            className="px-3 py-1 text-xs font-semibold">Daily values</button>`}>
+          <${ResponsiveContainer} width="100%" height=${220}>
+            <${LineChart} data=${weightSeries} margin=${topMargin}>
+              <${CartesianGrid} stroke=${C.grid} vertical=${false} />
+              <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
+              <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${weightDomain} />
+              <${Tooltip} content=${h(TT, { fmt: (v) => v.toFixed(1) + " kg" })} />
+              ${yearLines(view)}
+              ${raceLines(view, races)}
+              ${showRawWeight ? html`<${Line} type="monotone" dataKey="raw" name="Daily" stroke="#9aa6b6" strokeWidth=${1} strokeDasharray="2 3" strokeOpacity=${0.7} dot=${{ r: 2.5, fill: "#9aa6b6" }} isAnimationActive=${false} connectNulls=${false} />` : null}
+              <${Line} type="monotone" dataKey="weight" name="7-day avg" stroke=${C.amber} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
           <//>
         <//>
