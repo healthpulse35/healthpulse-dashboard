@@ -651,11 +651,11 @@ function App() {
           source="Source: derived (CTL − ATL). Underlying values come from intervals.icu wellness (Garmin partnership), with Strava-based EWMA fallback on gap days.">
           <${ResponsiveContainer} width="100%" height=${260}>
             <${LineChart} data=${view} margin=${topMargin}>
-              <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.06} />
-              <${ReferenceArea} y1=${5} y2=${20} fill=${C.cyan} fillOpacity=${0.06} />
-              <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.06} />
-              <${ReferenceArea} y1=${-30} y2=${-10} fill=${C.green} fillOpacity=${0.10} />
-              <${ReferenceArea} y1=${-60} y2=${-30} fill=${C.red} fillOpacity=${0.10} />
+              <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.22} />
+              <${ReferenceArea} y1=${5} y2=${20} fill=${C.cyan} fillOpacity=${0.22} />
+              <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.22} />
+              <${ReferenceArea} y1=${-30} y2=${-10} fill=${C.green} fillOpacity=${0.28} />
+              <${ReferenceArea} y1=${-60} y2=${-30} fill=${C.red} fillOpacity=${0.28} />
               <${CartesianGrid} stroke=${C.grid} vertical=${false} />
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
               <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[-45, 35]} />
@@ -769,7 +769,22 @@ function App() {
             <//>
           <//>
           <div className="flex flex-wrap gap-3 mt-3 text-[11px]" style=${{ color: C.muted }}>
-            ${zoneName.map((n, i) => html`<span key=${n}><span style=${{ color: zoneColor[i] }}>■</span> ${n}</span>`)}
+            ${zoneName.map((n, i) => {
+              // Standard Garmin / % of Max-HR zone model. Edges:
+              // Z1 <60% · Z2 60-70% · Z3 70-80% · Z4 80-90% · Z5 ≥90%.
+              const pct = [[0, 60], [60, 70], [70, 80], [80, 90], [90, 100]][i];
+              const range = RAW.maxHr
+                ? (i === 0
+                    ? `< ${Math.round(RAW.maxHr * pct[1] / 100)} bpm`
+                    : i === 4
+                      ? `≥ ${Math.round(RAW.maxHr * pct[0] / 100)} bpm`
+                      : `${Math.round(RAW.maxHr * pct[0] / 100)}–${Math.round(RAW.maxHr * pct[1] / 100)} bpm`)
+                : `${pct[0]}–${pct[1]}% max HR`;
+              return html`<div key=${n} className="flex flex-col">
+                <span><span style=${{ color: zoneColor[i] }}>■</span> ${n}</span>
+                <span style=${{ color: C.border, fontSize: 10 }} className="ml-3">${range}</span>
+              </div>`;
+            })}
           </div>
         <//>
 
