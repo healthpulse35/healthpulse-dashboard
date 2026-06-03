@@ -417,8 +417,251 @@ const StatusTile = ({ title, info }) => {
   </div>`;
 };
 
+// ---------- biomarkers ----------
+// Translates a DB biomarker row into render-ready shape:
+//   - bands[] of {name, lo, hi, color}
+//   - score severity 0–4 (0 = N/A, 1 = optimal, 4 = very high/low)
+//   - history series ordered by date
+//
+// The DB stores 14 numeric range columns (VL_lo … VH_hi). VH_hi is often
+// null in the sheet — we estimate it as `vh_lo + max(span, 15% of vh_lo)`
+// so the band paints visibly.
+const BIO_BAND_NAMES = ["Very Low", "Low", "Mod. Low", "Optimal", "Mod. High", "High", "Very High"];
+const BIO_BAND_COLORS = ["#ef4444", "#f97316", "#eab308", "#34d399", "#eab308", "#f97316", "#ef4444"];
+const BIO_BAND_KEYS = [
+  ["vl_lo", "vl_hi"], ["l_lo", "l_hi"], ["ml_lo", "ml_hi"],
+  ["opt_lo", "opt_hi"], ["mh_lo", "mh_hi"], ["h_lo", "h_hi"],
+  ["vh_lo", "vh_hi"],
+];
+const BIO_SCORE_SEV = {
+  "Very Low": 4, "Low": 3, "Moderately Low": 2,
+  "Optimal": 1,
+  "Moderately High": 2, "High": 3, "Very High": 4,
+};
+const BIO_SCORE_COLOR = {
+  "Very Low": "#ef4444", "Low": "#f97316", "Moderately Low": "#eab308",
+  "Optimal": "#34d399",
+  "Moderately High": "#eab308", "High": "#f97316", "Very High": "#ef4444",
+};
+const BIO_MON_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function parseBio(b) {
+  const ranges = [];
+  let vhHiEst = null;
+  for (let i = 0; i < 7; i++) {
+    const [klo, khi] = BIO_BAND_KEYS[i];
+    let lo = b[klo], hi = b[khi];
+    if (i === 6 && (hi == null || hi <= lo)) {
+      // Estimate VH upper bound so the band renders.
+      const span = lo - (b.h_lo ?? 0);
+      hi = lo + Math.max(span, Math.abs(lo) * 0.15, 0.1);
+      vhHiEst = hi;
+    }
+    ranges.push({ name: BIO_BAND_NAMES[i], lo, hi, color: BIO_BAND_COLORS[i] });
+  }
+  // The "current" value is the latest reading; fall back to nothing.
+  const hist = (b.history || []).slice().sort((a, c) => a.test_date.localeCompare(c.test_date));
+  const value = hist.length ? Number(hist[hist.length - 1].value) : null;
+  // Which band does the current value fall into?
+  let bandIdx = -1;
+  if (value != null) {
+    for (let i = 0; i < 7; i++) {
+      const r = ranges[i];
+      if (value >= r.lo && (value < r.hi || i === 6)) { bandIdx = i; break; }
+    }
+    if (bandIdx === -1) bandIdx = value < ranges[0].lo ? 0 : 6;
+  }
+  const score = b.platform_score || (bandIdx >= 0 ? ["Very Low","Low","Moderately Low","Optimal","Moderately High","High","Very High"][bandIdx] : "N/A");
+  const sev = BIO_SCORE_SEV[score] ?? 0;
+  const color = BIO_SCORE_COLOR[score] ?? C.muted;
+  // Render-friendly history: each entry gets an x-index and a label.
+  const series = hist.map((h, i) => {
+    const d = parseISO(h.test_date);
+    return {
+      x: i,
+      label: d.getDate() + " " + BIO_MON_SHORT[d.getMonth()] + " " + String(d.getFullYear()).slice(2),
+      value: Number(h.value),
+    };
+  });
+  const labelByX = {};
+  series.forEach((s) => { labelByX[s.x] = s.label; });
+  const xticks = series.map((s) => s.x);
+  const vals = series.map((s) => s.value).filter((v) => v != null);
+  const domLo = vals.length ? Math.min(b.vl_lo ?? 0, ...vals) : b.vl_lo ?? 0;
+  const domHi = vals.length ? Math.max(ranges[6].hi, ...vals) : ranges[6].hi;
+  // Place the latest reading at ~75% width so a future retest fits to the right.
+  let xMin, xMax;
+  if (series.length <= 1) { xMin = -3; xMax = 1; }
+  else { xMin = -0.3; xMax = xMin + (series.length - 1 - xMin) / 0.75; }
+  return {
+    name: b.name, category: b.category, units: b.units,
+    value, score, sev, color, ranges, bandIdx,
+    series, xDomain: [xMin, xMax], yDomain: [domLo, domHi], xticks, labelByX,
+    flagged: sev >= 2,
+    whatItMeasures: b.what_it_measures,
+    impactHigh: b.impact_high,
+    impactLow: b.impact_low,
+    recommendation: b.recommendation,
+  };
+}
+
+function Expand({ label, children }) {
+  const [open, setOpen] = useState(false);
+  return html`<div className="mt-2">
+    <button onClick=${() => setOpen((o) => !o)} style=${{ color: C.muted }} className="flex items-center gap-1.5 text-xs font-medium">
+      <span style=${{ display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
+      ${label}
+    </button>
+    ${open ? html`<div style=${{ color: C.muted }} className="text-xs mt-1.5 leading-relaxed">${children}</div>` : null}
+  </div>`;
+}
+
+const BioTT = ({ active, payload, label, units, labelMap }) => {
+  if (!active || !payload || !payload.length || payload[0].value == null) return null;
+  return html`<div style=${{ background: "#0c1117", border: "1px solid " + C.border, borderRadius: 8 }} className="px-3 py-2 text-xs">
+    <div style=${{ color: C.muted }} className="mb-0.5">${labelMap ? labelMap[label] : label}</div>
+    <div style=${{ color: C.text }} className="font-semibold">${payload[0].value} <span style=${{ color: C.muted }} className="font-normal">${units}</span></div>
+  </div>`;
+};
+
+function BioTrend({ b }) {
+  return html`<div className="flex flex-col sm:flex-row gap-3 mt-3">
+    <div style=${{ flex: 1, minWidth: 0 }}>
+      <${ResponsiveContainer} width="100%" height=${150}>
+        <${LineChart} data=${b.series} margin=${{ top: 6, right: 10, left: -14, bottom: 0 }}>
+          ${b.ranges.map((r, i) => html`<${ReferenceArea} key=${i} y1=${i === 0 ? b.yDomain[0] : r.lo} y2=${i === 6 ? b.yDomain[1] : r.hi} fill=${r.color} fillOpacity=${i === 3 ? 0.5 : 0.36} />`)}
+          <${CartesianGrid} stroke="rgba(255,255,255,0.06)" vertical=${false} />
+          <${XAxis} type="number" dataKey="x" domain=${b.xDomain} ticks=${b.xticks} interval=${0}
+            tickFormatter=${(x) => b.labelByX[x] || ""} tick=${{ fill: C.muted, fontSize: 10 }} tickLine=${false} axisLine=${{ stroke: C.border }} />
+          <${YAxis} domain=${b.yDomain} tick=${{ fill: C.muted, fontSize: 10 }} tickLine=${false} axisLine=${false} width=${36} />
+          <${Tooltip} content=${h(BioTT, { units: b.units, labelMap: b.labelByX })} />
+          <${Line} type="monotone" dataKey="value" stroke="#ffffff" strokeWidth=${2} isAnimationActive=${false} connectNulls=${true}
+            dot=${{ r: 4, fill: "#ffffff", stroke: C.bg, strokeWidth: 2 }} activeDot=${{ r: 5 }} />
+        <//>
+      <//>
+    </div>
+    <div className="sm:w-[150px] shrink-0">
+      <div style=${{ color: C.muted, letterSpacing: "0.08em" }} className="text-[9px] uppercase font-semibold mb-1">Ranges · ${b.units || ""}</div>
+      <div className="flex flex-col gap-0.5">
+        ${[6,5,4,3,2,1,0].map((i) => {
+          const r = b.ranges[i];
+          const fmtNum = (v) => Math.round(v * 100) / 100;
+          const bound = i === 6 ? (fmtNum(r.lo) + "+") : (fmtNum(r.lo) + "–" + fmtNum(r.hi));
+          const on = b.bandIdx === i;
+          return html`<div key=${i} className="flex items-center gap-2 text-[10px]">
+            <span style=${{ width: 8, height: 8, borderRadius: 2, background: r.color, flexShrink: 0, display: "inline-block", outline: on ? ("1px solid " + C.text) : "none" }}></span>
+            <span style=${{ color: on ? C.text : C.muted, fontWeight: on ? 700 : 400 }} className="flex-1">${r.name}</span>
+            <span style=${{ color: C.muted }}>${bound}</span>
+          </div>`;
+        })}
+      </div>
+    </div>
+  </div>`;
+}
+
+function BiomarkerCard({ b }) {
+  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + b.color, borderRadius: 12 }} className="p-4 mb-3">
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <div className="text-sm font-semibold" style=${{ color: C.text }}>${b.name}</div>
+        <div className="text-[10px] uppercase mt-0.5" style=${{ color: C.muted, letterSpacing: "0.06em" }}>${b.category}</div>
+      </div>
+      <div className="text-right shrink-0">
+        <div className="text-lg font-bold" style=${{ color: C.text }}>
+          ${b.value != null ? b.value : "—"} <span className="text-[11px] font-normal" style=${{ color: C.muted }}>${b.units || ""}</span>
+        </div>
+        <span style=${{ color: b.color, border: "1px solid " + b.color, borderRadius: 999 }} className="text-[10px] font-semibold px-2 py-0.5 inline-block mt-1">${b.score}</span>
+      </div>
+    </div>
+    <${BioTrend} b=${b} />
+    ${b.flagged && b.recommendation ? html`<div style=${{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8 }} className="mt-3 p-3">
+      <div style=${{ color: C.amber }} className="text-[11px] font-semibold mb-1">How to improve</div>
+      <div style=${{ color: "#d9c9a8" }} className="text-xs leading-relaxed">${b.recommendation}</div>
+    </div>` : null}
+    ${b.whatItMeasures ? html`<${Expand} label="What it measures">${b.whatItMeasures}</${Expand}>` : null}
+    ${(b.impactHigh || b.impactLow) ? html`<${Expand} label="Impact if high / low">
+      ${b.impactHigh ? html`<div><span style=${{ color: "#aeb8c6" }} className="font-semibold">If high: </span>${b.impactHigh}</div>` : null}
+      ${b.impactLow ? html`<div className="mt-1.5"><span style=${{ color: "#aeb8c6" }} className="font-semibold">If low: </span>${b.impactLow}</div>` : null}
+    </${Expand}>` : null}
+  </div>`;
+}
+
+function BiomarkersView() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [sortBy, setSortBy] = useState("Platform score");
+  React.useEffect(() => {
+    if (data || err) return;
+    const params = new URLSearchParams(location.search);
+    const token = params.get("t") || params.get("token") || "";
+    fetch("https://ptisuvfdufngdfxfrzvn.supabase.co/functions/v1/dashboard?resource=biomarkers&token=" + encodeURIComponent(token))
+      .then(async (r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then((d) => setData(d))
+      .catch((e) => setErr(String(e.message || e)));
+  }, [data, err]);
+
+  if (err) return html`<div style=${{ color: C.red }} className="text-sm">Failed to load biomarkers: ${err}</div>`;
+  if (!data) return html`<div style=${{ color: C.muted }} className="text-sm">Loading biomarkers…</div>`;
+
+  const parsed = data.biomarkers.map(parseBio);
+  const attention = parsed.filter((d) => d.sev >= 3).length;
+
+  let groups;
+  if (sortBy === "Platform score") {
+    const list = parsed.slice().sort((a, b) => b.sev - a.sev || a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+    groups = [{ category: null, items: list }];
+  } else {
+    const map = {}, order = [];
+    for (const it of parsed) { if (!map[it.category]) { map[it.category] = []; order.push(it.category); } map[it.category].push(it); }
+    order.sort();
+    groups = order.map((cat) => ({ category: cat, items: map[cat].slice().sort((a, b) => b.sev - a.sev || a.name.localeCompare(b.name)) }));
+  }
+
+  // Latest test date across all readings
+  let latestStr = "—";
+  const allDates = parsed.flatMap((p) => p.series.map((s) => s.label));
+  if (allDates.length) latestStr = allDates[allDates.length - 1];
+
+  return html`<div>
+    <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
+      <div>
+        <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Blood Panel</div>
+        <h1 className="text-2xl font-bold mt-1">Biomarkers</h1>
+        <div style=${{ color: C.muted }} className="text-xs mt-1">${parsed.length} markers · <span style=${{ color: C.amber }}>${attention}</span> flagged High/Low</div>
+      </div>
+      <div className="flex flex-col items-end gap-1.5">
+        <span style=${{ color: C.muted }} className="text-[10px] uppercase font-semibold">Sort by</span>
+        <${Pills} options=${["Platform score", "Category"]} value=${sortBy} onChange=${setSortBy} />
+      </div>
+    </div>
+
+    <div style=${{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10 }} className="p-3 mb-4 text-xs">
+      <span style=${{ color: C.red }} className="font-semibold">Educational only — not medical advice. </span>
+      <span style=${{ color: C.muted }}>Ranges blend clinical and longevity/athlete targets. Discuss anything flagged with a doctor before making changes.</span>
+    </div>
+
+    <div className="flex flex-wrap gap-3 mb-4 text-[11px]" style=${{ color: C.muted }}>
+      <span><span style=${{ color: "#ef4444" }}>■</span> Very high / very low</span>
+      <span><span style=${{ color: "#f97316" }}>■</span> High / low</span>
+      <span><span style=${{ color: "#eab308" }}>■</span> Moderately high / low</span>
+      <span><span style=${{ color: "#34d399" }}>■</span> Optimal</span>
+    </div>
+
+    ${groups.map((g, gi) => html`<div key=${gi}>
+      ${g.category ? html`<div style=${{ color: C.text, borderBottom: "1px solid " + C.border }} className="text-sm font-semibold mt-5 mb-3 pb-2">${g.category}</div>` : null}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+        ${g.items.map((b) => html`<${BiomarkerCard} key=${b.name} b=${b} />`)}
+      </div>
+    </div>`)}
+  </div>`;
+}
+
 // ---------- main ----------
 function App() {
+  const [tab, setTab] = useState("Training");
   const [range, setRange] = useState("6M");
   const [volGran, setVolGran] = useState("Weekly");
   const [zoneGran, setZoneGran] = useState("Weekly");
@@ -615,9 +858,19 @@ function App() {
   const today = new Date();
   const todayStr = today.getDate() + " " + MON[today.getMonth()] + " " + today.getFullYear();
 
+  // Tab bar — always rendered; the Training-only floating range selector
+  // is conditioned on the active tab so it doesn't show on Biomarkers.
+  const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4" style=${{ borderBottom: "1px solid " + C.border }}>
+    ${["Training", "Biomarkers"].map((t) => {
+      const on = t === tab;
+      return html`<button key=${t} onClick=${() => setTab(t)}
+        style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1 }}
+        className="px-4 py-2.5 text-sm font-semibold transition-colors">${t}</button>`;
+    })}
+  </div>`;
+
   return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-2 sm:p-6">
-    <!-- Desktop: floating vertical range selector pinned to the left edge -->
-    <div className="hidden sm:flex fixed left-3 top-1/2 -translate-y-1/2 flex-col gap-2 z-10">
+    ${tab === "Training" ? html`<div className="hidden sm:flex fixed left-3 top-1/2 -translate-y-1/2 flex-col gap-2 z-10">
       ${["1M", "3M", "6M", "1Y", "2Y", "All"].map((o) => {
         const on = o === range;
         return html`<button key=${o} onClick=${() => onRange(o)}
@@ -629,9 +882,13 @@ function App() {
           }}
           className="px-3 py-2 rounded-full text-xs font-semibold transition-colors shadow-md">${o}</button>`;
       })}
-    </div>
+    </div>` : null}
 
-    <div className="max-w-7xl mx-auto">
+    ${TabBar}
+
+    ${tab === "Biomarkers" ? html`<div className="max-w-7xl mx-auto"><${BiomarkersView} /></div>` : null}
+
+    ${tab !== "Training" ? null : html`<div className="max-w-7xl mx-auto">
       <div className="flex items-end justify-between flex-wrap gap-3 mb-5">
         <div>
           <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Training Overview</div>
@@ -948,7 +1205,7 @@ function App() {
       <div style=${{ color: C.muted }} className="text-[11px] text-center mt-2 mb-4">
         Live data · ${DAYS.length} days · ${AE_SESSIONS.length} aerobic-efficiency sessions · ${races.length} race${races.length === 1 ? "" : "s"}
       </div>
-    </div>
+    </div>`}
   </div>`;
 }
 
