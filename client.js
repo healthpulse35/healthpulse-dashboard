@@ -424,6 +424,20 @@ function App() {
   const [showRaw, setShowRaw] = useState(false);
   const [showRawWeight, setShowRawWeight] = useState(false);
   const [loadView, setLoadView] = useState("Acute load"); // "Acute load" | "Ratio"
+  const [fitOverlay, setFitOverlay] = useState("None");
+
+  // Optional metric overlayed on the Fitness & Fatigue chart's right Y-axis.
+  // `key` is the field name on each view row.
+  const FIT_OVERLAYS = {
+    "None":              null,
+    "Form (TSB)":        { key: "form",      color: "#e6eaf0", unit: "" },
+    "ACWR":              { key: "acwr",      color: "#a78bfa", unit: "" },
+    "HRV (7d)":          { key: "hrv",       color: C.green,   unit: " ms" },
+    "Resting HR (7d)":   { key: "rhr",       color: C.teal,    unit: " bpm" },
+    "Weight (7d)":       { key: "weight",    color: C.amber,   unit: " kg" },
+    "Sleep (h)":         { key: "sleep",     color: "#818cf8", unit: " h" },
+    "Daily load":        { key: "loadTotal", color: "#9aa6b6", unit: "" },
+  };
 
   // Races: persisted to localStorage so they survive reloads / re-tokens.
   const [races, setRaces] = useState(loadRaces);
@@ -640,61 +654,71 @@ function App() {
         <${Pills} options=${["1M", "3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
       </div>
 
+      <!-- Fitness & Fatigue + Form: full width, stacked, then the 2-col grid below -->
+      <${Card} title="Fitness & Fatigue" sub="Blue = fitness (CTL, 42-day EWMA). Purple = fatigue (ATL, 7-day EWMA). Form = blue − purple."
+        source="Source: intervals.icu wellness (Garmin Connect partnership). Days without a wellness row fall back to a local EWMA over Strava training-load."
+        right=${html`<div className="flex items-center gap-2">
+          <span style=${{ color: C.muted }} className="text-[11px]">Overlay</span>
+          <select value=${fitOverlay} onChange=${(e) => setFitOverlay(e.target.value)}
+            style=${{ background: C.card, border: "1px solid " + C.border, color: C.text, borderRadius: 999, colorScheme: "dark" }}
+            className="px-3 py-1 text-xs font-semibold">
+            ${Object.keys(FIT_OVERLAYS).map((k) => html`<option key=${k} value=${k}>${k}</option>`)}
+          </select>
+        </div>`}>
+        <${ResponsiveContainer} width="100%" height=${300}>
+          <${ComposedChart} data=${view} margin=${{ top: 16, right: 12, left: -12, bottom: 0 }}>
+            <defs>
+              <linearGradient id="gFit" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor=${C.cyan} stopOpacity=${0.32} />
+                <stop offset="100%" stopColor=${C.cyan} stopOpacity=${0.02} />
+              </linearGradient>
+            </defs>
+            <${CartesianGrid} stroke=${C.grid} vertical=${false} />
+            <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
+            <${YAxis} yAxisId="left" tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
+            ${FIT_OVERLAYS[fitOverlay] ? html`<${YAxis} yAxisId="right" orientation="right" tick=${{ ...axis, fill: FIT_OVERLAYS[fitOverlay].color }} tickLine=${false} axisLine=${false} width=${42} />` : null}
+            <${Tooltip} content=${h(TT)} />
+            ${yearLines(view)}
+            ${raceLines(view, races)}
+            <${Area} yAxisId="left" type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" dot=${false} />
+            <${Line} yAxisId="left" type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
+            ${FIT_OVERLAYS[fitOverlay] ? html`<${Line} yAxisId="right" type="monotone" dataKey=${FIT_OVERLAYS[fitOverlay].key} name=${fitOverlay} stroke=${FIT_OVERLAYS[fitOverlay].color} strokeWidth=${1.6} strokeDasharray="4 3" dot=${false} connectNulls=${true} isAnimationActive=${false} />` : null}
+          <//>
+        <//>
+        <div className="text-[11px] mt-3" style=${{ color: C.muted, lineHeight: 1.5 }}>
+          Keep purple above blue to drive fitness up. Form (blue − purple) optimal when slightly positive; very negative = high injury risk; very positive = ready to race. Schedule rest weeks to clear fatigue before key events.
+        </div>
+      <//>
+
+      <${Card} title="Form (TSB)" sub="Fitness − Fatigue. Negative = loaded; very negative = high injury risk."
+        source="Source: derived (CTL − ATL). Underlying values come from intervals.icu wellness (Garmin partnership), with Strava-based EWMA fallback on gap days.">
+        <${ResponsiveContainer} width="100%" height=${300}>
+          <${LineChart} data=${view} margin=${topMargin}>
+            <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.22} />
+            <${ReferenceArea} y1=${5} y2=${20} fill=${C.cyan} fillOpacity=${0.22} />
+            <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.22} />
+            <${ReferenceArea} y1=${-30} y2=${-10} fill=${C.green} fillOpacity=${0.28} />
+            <${ReferenceArea} y1=${-60} y2=${-30} fill=${C.red} fillOpacity=${0.28} />
+            <${CartesianGrid} stroke=${C.grid} vertical=${false} />
+            <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
+            <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[-45, 35]} />
+            <${Tooltip} content=${h(TT)} />
+            <${ReferenceLine} y=${0} stroke=${C.border} />
+            ${yearLines(view)}
+            ${raceLines(view, races)}
+            <${Line} type="monotone" dataKey="form" name="Form" stroke="#e6eaf0" strokeWidth=${1.8} dot=${false} />
+          <//>
+        <//>
+        <div className="flex flex-wrap gap-3 mt-3 text-[11px]" style=${{ color: C.muted }}>
+          <span><span style=${{ color: C.amber }}>■</span> Transition</span>
+          <span><span style=${{ color: C.cyan }}>■</span> Fresh</span>
+          <span><span style=${{ color: C.muted }}>■</span> Grey zone</span>
+          <span><span style=${{ color: C.green }}>■</span> Optimal</span>
+          <span><span style=${{ color: C.red }}>■</span> High risk</span>
+        </div>
+      <//>
+
       <div className="grid grid-cols-1 md:grid-cols-2 md:gap-x-4">
-
-        <${Card} title="Fitness & Fatigue" sub="Blue = fitness (CTL, 42-day EWMA). Purple = fatigue (ATL, 7-day EWMA). Form = blue − purple."
-          source="Source: intervals.icu wellness (Garmin Connect partnership). Days without a wellness row fall back to a local EWMA over Strava training-load.">
-
-          <${ResponsiveContainer} width="100%" height=${260}>
-            <${ComposedChart} data=${view} margin=${topMargin}>
-              <defs>
-                <linearGradient id="gFit" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor=${C.cyan} stopOpacity=${0.32} />
-                  <stop offset="100%" stopColor=${C.cyan} stopOpacity=${0.02} />
-                </linearGradient>
-              </defs>
-              <${CartesianGrid} stroke=${C.grid} vertical=${false} />
-              <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
-              <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
-              <${Tooltip} content=${h(TT)} />
-              ${yearLines(view)}
-              ${raceLines(view, races)}
-              <${Area} type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" dot=${false} />
-              <${Line} type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
-            <//>
-          <//>
-          <div className="text-[11px] mt-3" style=${{ color: C.muted, lineHeight: 1.5 }}>
-            Keep purple above blue to drive fitness up. Form (blue − purple) optimal when slightly positive; very negative = high injury risk; very positive = ready to race. Schedule rest weeks to clear fatigue before key events.
-          </div>
-        <//>
-
-        <${Card} title="Form (TSB)" sub="Fitness − Fatigue. Negative = loaded; very negative = high injury risk."
-          source="Source: derived (CTL − ATL). Underlying values come from intervals.icu wellness (Garmin partnership), with Strava-based EWMA fallback on gap days.">
-          <${ResponsiveContainer} width="100%" height=${260}>
-            <${LineChart} data=${view} margin=${topMargin}>
-              <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.22} />
-              <${ReferenceArea} y1=${5} y2=${20} fill=${C.cyan} fillOpacity=${0.22} />
-              <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.22} />
-              <${ReferenceArea} y1=${-30} y2=${-10} fill=${C.green} fillOpacity=${0.28} />
-              <${ReferenceArea} y1=${-60} y2=${-30} fill=${C.red} fillOpacity=${0.28} />
-              <${CartesianGrid} stroke=${C.grid} vertical=${false} />
-              <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
-              <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[-45, 35]} />
-              <${Tooltip} content=${h(TT)} />
-              <${ReferenceLine} y=${0} stroke=${C.border} />
-              ${yearLines(view)}
-              ${raceLines(view, races)}
-              <${Line} type="monotone" dataKey="form" name="Form" stroke="#e6eaf0" strokeWidth=${1.8} dot=${false} />
-            <//>
-          <//>
-          <div className="flex flex-wrap gap-3 mt-3 text-[11px]" style=${{ color: C.muted }}>
-            <span><span style=${{ color: C.amber }}>■</span> Transition</span>
-            <span><span style=${{ color: C.cyan }}>■</span> Fresh</span>
-            <span><span style=${{ color: C.muted }}>■</span> Grey zone</span>
-            <span><span style=${{ color: C.green }}>■</span> Optimal</span>
-            <span><span style=${{ color: C.red }}>■</span> High risk</span>
-          </div>
-        <//>
 
         <${Card}
           title=${loadView === "Acute load" ? "Acute Load" : "Acute : Chronic Load Ratio"}
