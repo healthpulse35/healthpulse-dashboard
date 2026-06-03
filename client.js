@@ -427,7 +427,7 @@ const StatusTile = ({ title, info }) => {
 // null in the sheet — we estimate it as `vh_lo + max(span, 15% of vh_lo)`
 // so the band paints visibly.
 const BIO_BAND_NAMES = ["Very Low", "Low", "Mod. Low", "Optimal", "Mod. High", "High", "Very High"];
-const BIO_BAND_COLORS = ["#ef4444", "#f97316", "#eab308", "#34d399", "#eab308", "#f97316", "#ef4444"];
+const BIO_BAND_COLORS = ["#d1fae5", "#a7f3d0", "#6ee7b7", "#34d399", "#6ee7b7", "#a7f3d0", "#d1fae5"];
 const BIO_BAND_KEYS = [
   ["vl_lo", "vl_hi"], ["l_lo", "l_hi"], ["ml_lo", "ml_hi"],
   ["opt_lo", "opt_hi"], ["mh_lo", "mh_hi"], ["h_lo", "h_hi"],
@@ -559,26 +559,104 @@ function BioTrend({ b }) {
   </div>`;
 }
 
-function BiomarkerCard({ b }) {
-  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + b.color, borderRadius: 12 }} className="p-4 mb-3">
+// Performance-area groupings — biomarkers bucketed into "what they say about
+// your body" themes (cross-cutting across the clinical Cardio/Endocrine/etc).
+// Membership is a soft list: missing markers are filtered out at render time.
+const BIO_PERF_GROUPS = [
+  { name: "Heart Health", desc: "How efficiently your cardiovascular system transports oxygen, nutrients and cholesterol.", members: ["Apo B", "LDL Cholesterol", "Total Cholesterol", "HDL Cholesterol", "Triglycerides", "HS-CRP", "Thyroid Stimulating Hormone (TSH)"] },
+  { name: "Metabolism", desc: "How well your body converts food into energy and manages blood sugar and lipids.", members: ["Apo B", "Fasting Blood Glucose (FBG)", "HbA1c", "Triglycerides", "ALT", "HDL Cholesterol", "LDL Cholesterol", "Thyroid Stimulating Hormone (TSH)", "Total Cholesterol"] },
+  { name: "Endurance", desc: "Oxygen-carrying capacity and the blood markers behind aerobic performance.", members: ["Ferritin", "Hemoglobin", "Platelets", "% Transferrin Saturation", "Vitamin B12", "Iron", "Hematocrit", "MPV", "TIBC", "MCH", "MCHC", "MCV", "Red Blood Cell (RBC)", "RDW"] },
+  { name: "Fitness", desc: "Hormonal and nutrient markers behind strength, power and recovery.", members: ["Total Testosterone", "SHBG", "Cortisol - AM", "Vitamin B12", "Folate (Serum)", "Free Testosterone"] },
+  { name: "Hormone Balance", desc: "Endocrine markers that shape recovery, mood, libido and energy.", members: ["Cortisol - AM", "Vitamin D", "SHBG", "Total Testosterone", "Thyroid Stimulating Hormone (TSH)", "Calcium", "Estradiol", "Magnesium", "Free Testosterone"] },
+  { name: "Inflammation", desc: "Immune and inflammatory markers reflecting how your body handles stress and infection.", members: ["HS-CRP", "White Blood Cell (WBC)", "Ferritin", "Vitamin D", "Basophils", "Eosinophils", "Lymphocytes", "Monocytes", "Neutrophils"] },
+  { name: "Cognition", desc: "Markers linked to focus, memory and mood via blood sugar, stress and B-vitamins.", members: ["Cortisol - AM", "Fasting Blood Glucose (FBG)", "HbA1c", "Vitamin B12", "Folate (Serum)"] },
+  { name: "Gut Health", desc: "Metabolic and inflammatory markers relevant to gut and digestive function.", members: ["Cortisol - AM", "Fasting Blood Glucose (FBG)", "HDL Cholesterol", "HbA1c", "HS-CRP", "Triglycerides"] },
+];
+
+// 0-100 group score: average of per-marker points (4=20, 3=45, 2=70, 1=100),
+// so a couple of red flags drop the ring sharply without being smoothed out.
+const BIO_GROUP_PTS = { 1: 100, 2: 70, 3: 45, 4: 20 };
+function bioGroupScore(items) {
+  const v = items.filter((i) => i.sev >= 1).map((i) => BIO_GROUP_PTS[i.sev]);
+  return v.length ? Math.round(v.reduce((s, x) => s + x, 0) / v.length) : null;
+}
+function bioGroupScoreLabel(s) {
+  if (s == null) return { w: "No score", c: C.muted };
+  if (s >= 80) return { w: "Optimal",    c: "#34d399" };
+  if (s >= 65) return { w: "Good",       c: "#7bcf7b" };
+  if (s >= 50) return { w: "Fair",       c: "#eab308" };
+  if (s >= 35) return { w: "Watch",      c: "#f97316" };
+  return         { w: "Needs work", c: "#ef4444" };
+}
+
+function ScoreRing({ score, color }) {
+  const R = 32, CC = 2 * Math.PI * R;
+  const pct = score == null ? 0 : Math.max(0, Math.min(100, score));
+  const off = CC * (1 - pct / 100);
+  return html`<svg width="86" height="86" viewBox="0 0 86 86">
+    <circle cx="43" cy="43" r=${R} fill="none" stroke=${C.border} strokeWidth="8" />
+    <circle cx="43" cy="43" r=${R} fill="none" stroke=${color} strokeWidth="8" strokeLinecap="round"
+      strokeDasharray=${CC} strokeDashoffset=${off} transform="rotate(-90 43 43)" />
+    <text x="43" y="43" textAnchor="middle" dominantBaseline="central" fill=${C.text} fontSize="24" fontWeight="700">${score == null ? "–" : score}</text>
+  </svg>`;
+}
+
+// Horizontal 7-segment band bar with a white tick at the current value.
+function MiniRange({ b }) {
+  let pos = null;
+  if (b.bandIdx >= 0 && typeof b.value === "number") {
+    const r = b.ranges[b.bandIdx], span = r.hi - r.lo;
+    const frac = span > 0 ? Math.min(1, Math.max(0, (b.value - r.lo) / span)) : 0.5;
+    pos = ((b.bandIdx + frac) / 7) * 100;
+  }
+  return html`<div style=${{ position: "relative" }} className="mt-2">
+    <div className="flex" style=${{ height: 6, borderRadius: 4, overflow: "hidden", gap: 1 }}>
+      ${b.ranges.map((r, i) => html`<div key=${i} style=${{ flex: 1, background: r.color, opacity: 0.85 }} />`)}
+    </div>
+    ${pos != null ? html`<div style=${{ position: "absolute", left: pos + "%", top: -2, width: 2, height: 10, background: "#fff", boxShadow: "0 0 0 1px rgba(0,0,0,0.55)", transform: "translateX(-50%)" }} />` : null}
+  </div>`;
+}
+
+function GroupMiniCard({ b, onClick }) {
+  const what = b.whatItMeasures || "";
+  const short = what.length > 42 ? what.slice(0, 40) + "…" : what;
+  return html`<button onClick=${onClick} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10 }} className="text-left p-3 w-full transition-colors">
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0">
+        <div className="text-sm font-semibold truncate" style=${{ color: C.text }}>${b.name}</div>
+        ${short ? html`<div className="text-[10px] truncate mt-0.5" style=${{ color: C.muted }}>${short}</div>` : null}
+      </div>
+      <div className="text-right shrink-0">
+        <div className="text-sm font-bold" style=${{ color: C.text }}>${b.value != null ? b.value : "—"}<span className="text-[9px] font-normal" style=${{ color: C.muted }}> ${b.units || ""}</span></div>
+        <span style=${{ color: b.color, border: "1px solid " + b.color, borderRadius: 999 }} className="text-[9px] font-semibold px-1.5 py-0.5 inline-block mt-1">${b.score}</span>
+      </div>
+    </div>
+    <${MiniRange} b=${b} />
+  </button>`;
+}
+
+function MarkerDetail({ b }) {
+  if (!b) return null;
+  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + b.color, borderRadius: 14 }} className="p-5">
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <div className="text-sm font-semibold" style=${{ color: C.text }}>${b.name}</div>
+        <div className="text-base font-semibold" style=${{ color: C.text }}>${b.name}</div>
         <div className="text-[10px] uppercase mt-0.5" style=${{ color: C.muted, letterSpacing: "0.06em" }}>${b.category}</div>
       </div>
       <div className="text-right shrink-0">
-        <div className="text-lg font-bold" style=${{ color: C.text }}>
-          ${b.value != null ? b.value : "—"} <span className="text-[11px] font-normal" style=${{ color: C.muted }}>${b.units || ""}</span>
-        </div>
+        <div className="text-xl font-bold" style=${{ color: C.text }}>${b.value != null ? b.value : "—"} <span className="text-xs font-normal" style=${{ color: C.muted }}>${b.units || ""}</span></div>
         <span style=${{ color: b.color, border: "1px solid " + b.color, borderRadius: 999 }} className="text-[10px] font-semibold px-2 py-0.5 inline-block mt-1">${b.score}</span>
       </div>
     </div>
     <${BioTrend} b=${b} />
-    ${b.flagged && b.recommendation ? html`<div style=${{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8 }} className="mt-3 p-3">
+    ${b.flagged && b.recommendation ? html`<div style=${{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8 }} className="mt-4 p-3">
       <div style=${{ color: C.amber }} className="text-[11px] font-semibold mb-1">How to improve</div>
       <div style=${{ color: "#d9c9a8" }} className="text-xs leading-relaxed">${b.recommendation}</div>
     </div>` : null}
-    ${b.whatItMeasures ? html`<${Expand} label="What it measures">${b.whatItMeasures}</${Expand}>` : null}
+    ${b.whatItMeasures ? html`<div className="mt-4">
+      <div style=${{ color: C.muted, letterSpacing: "0.06em" }} className="text-[10px] uppercase font-semibold mb-1">What it measures</div>
+      <div style=${{ color: "#aeb8c6" }} className="text-xs leading-relaxed">${b.whatItMeasures}</div>
+    </div>` : null}
     ${(b.impactHigh || b.impactLow) ? html`<${Expand} label="Impact if high / low">
       ${b.impactHigh ? html`<div><span style=${{ color: "#aeb8c6" }} className="font-semibold">If high: </span>${b.impactHigh}</div>` : null}
       ${b.impactLow ? html`<div className="mt-1.5"><span style=${{ color: "#aeb8c6" }} className="font-semibold">If low: </span>${b.impactLow}</div>` : null}
@@ -586,107 +664,10 @@ function BiomarkerCard({ b }) {
   </div>`;
 }
 
-// Key markers per category — these get extra weight in the aggregate score.
-// Anything not listed defaults to weight 1. Weights chosen from longevity-
-// medicine literature (e.g. ApoB > LDL > HDL for cardiovascular risk).
-const BIO_CAT_KEY_WEIGHTS = {
-  "Cardiovascular": {
-    "Apo B": 3,
-    "LDL Cholesterol": 2.5,
-    "Non-HDL Cholesterol": 2,
-    "HS-CRP": 2,
-    "Lipoprotein(a)": 1.5,
-    "Triglycerides": 1.2,
-  },
-  "Hormones": {
-    "Free Testosterone": 2.5,
-    "Total Testosterone": 2,
-    "Free Testosterone %": 2,
-    "SHBG": 1.5,
-    "Cortisol - AM": 1.5,
-    "Cortisol : DHEA ratio": 1.5,
-    "Estradiol": 1.2,
-  },
-  "Immune / Blood": {
-    "Neutrophil:Lymphocyte (NLR)": 2,
-    "Lymphocytes": 1.5,
-    "Ferritin": 1.5,
-    "Iron": 1.5,
-    "Hemoglobin": 1.5,
-    "Hematocrit": 1.5,
-    "White Blood Cell (WBC)": 1.5,
-    "Thyroid Stimulating Hormone (TSH)": 1.5,
-    "Free T3": 1.5,
-    "RDW": 1.5,
-  },
-  "Kidney / Liver": {
-    "eGFR": 2,
-    "Creatinine": 1.5,
-    "ALT": 1.5,
-    "GGT": 1.5,
-    "AST": 1.2,
-  },
-  "Metabolic": {
-    "HbA1c": 2.5,
-    "Fasting Blood Glucose (FBG)": 2,
-    "Albumin": 1.5,
-    "TyG index": 1.5,
-    "C-Peptide": 1.2,
-  },
-  "Vitamins": { "Vitamin D": 1.5, "Vitamin B12": 1.5 },
-  "Bone / Minerals": { "Calcium": 1.2, "Phosphorus": 1.2 },
-  "Electrolytes": {},
-};
-
-// Aggregate category score: 50/50 blend of weighted-mean severity and
-// max severity, so a single critical marker drives the label without
-// being averaged away by lots of optimal markers in the same group.
-function categoryScore(items) {
-  if (!items.length) return null;
-  const weights = BIO_CAT_KEY_WEIGHTS[items[0].category] || {};
-  let totalW = 0, weightedSev = 0, maxSev = 0;
-  let worst = null;
-  for (const b of items) {
-    const sev = b.sev || 1;
-    const w = weights[b.name] || 1;
-    totalW += w;
-    weightedSev += sev * w;
-    if (sev > maxSev || (sev === maxSev && w > (weights[worst?.name] || 1))) {
-      maxSev = sev;
-      worst = b;
-    }
-  }
-  const avg = weightedSev / totalW;
-  const score = 0.5 * avg + 0.5 * maxSev;
-  let label, color;
-  if (score < 1.5)      { label = "Optimal";    color = C.green; }
-  else if (score < 2.3) { label = "Watch";      color = C.amber; }
-  else if (score < 3.2) { label = "Concerning"; color = "#fb923c"; }
-  else                  { label = "Critical";   color = C.red; }
-  return { label, color, n: items.length, worst, score };
-}
-
-const CategoryScoreTile = ({ category, info }) => {
-  if (!info) return null;
-  return html`<div style=${{
-      background: C.card,
-      border: "1px solid " + C.border,
-      borderLeft: "3px solid " + info.color,
-      borderRadius: 10,
-    }} className="px-3 py-2">
-    <div style=${{ color: C.muted, letterSpacing: "0.12em" }} className="text-[8px] font-semibold uppercase">${category}</div>
-    <div className="flex items-center gap-1 mt-1">
-      <span style=${{ color: info.color, fontSize: 8 }}>●</span>
-      <span style=${{ color: info.color }} className="text-sm font-semibold">${info.label}</span>
-    </div>
-    <div style=${{ color: C.muted }} className="text-[10px] mt-0.5 truncate">${info.n} markers${info.worst && info.worst.sev >= 2 ? " · worst: " + info.worst.name : ""}</div>
-  </div>`;
-};
-
 function BiomarkersView() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  const [sortBy, setSortBy] = useState("Platform score");
+  const [modal, setModal] = useState(null);
   React.useEffect(() => {
     if (data || err) return;
     const params = new URLSearchParams(location.search);
@@ -704,74 +685,91 @@ function BiomarkersView() {
   if (!data) return html`<div style=${{ color: C.muted }} className="text-sm">Loading biomarkers…</div>`;
 
   const parsed = data.biomarkers.map(parseBio);
+  const byName = {}; parsed.forEach((p) => { byName[p.name] = p; });
   const attention = parsed.filter((d) => d.sev >= 3).length;
 
-  let groups;
-  if (sortBy === "Platform score") {
-    const list = parsed.slice().sort((a, b) => b.sev - a.sev || a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
-    groups = [{ category: null, items: list }];
-  } else {
-    const map = {}, order = [];
-    for (const it of parsed) { if (!map[it.category]) { map[it.category] = []; order.push(it.category); } map[it.category].push(it); }
-    order.sort();
-    groups = order.map((cat) => ({ category: cat, items: map[cat].slice().sort((a, b) => b.sev - a.sev || a.name.localeCompare(b.name)) }));
-  }
+  const perfGroups = BIO_PERF_GROUPS.map((g) => ({
+    name: g.name, desc: g.desc,
+    items: g.members.map((n) => byName[n]).filter(Boolean),
+  })).filter((g) => g.items.length);
 
-  // Latest test date across all readings
-  let latestStr = "—";
+  // Anything not slotted into a performance group falls into the clinical-
+  // category buckets below.
+  const used = new Set();
+  perfGroups.forEach((g) => g.items.forEach((i) => used.add(i.name)));
+  const leftovers = parsed.filter((p) => !used.has(p.name));
+  const lmap = {}, lorder = [];
+  leftovers.forEach((p) => {
+    if (!lmap[p.category]) { lmap[p.category] = []; lorder.push(p.category); }
+    lmap[p.category].push(p);
+  });
+  lorder.sort();
+  const extraGroups = lorder.map((cat) => ({
+    name: cat,
+    desc: "Additional clinical markers not tied to a performance category.",
+    items: lmap[cat].slice().sort((a, b) => b.sev - a.sev || a.name.localeCompare(b.name)),
+  }));
+
   const allDates = parsed.flatMap((p) => p.series.map((s) => s.label));
-  if (allDates.length) latestStr = allDates[allDates.length - 1];
+  const latestStr = allDates.length ? allDates[allDates.length - 1] : "—";
 
-  // Aggregate per-category scores for the top strip.
-  const byCat = {};
-  for (const p of parsed) (byCat[p.category] ??= []).push(p);
-  const catOrder = ["Cardiovascular", "Metabolic", "Hormones", "Immune / Blood", "Kidney / Liver", "Electrolytes", "Vitamins", "Bone / Minerals"];
-  const knownCats = catOrder.filter((c) => byCat[c]);
-  const unknownCats = Object.keys(byCat).filter((c) => !catOrder.includes(c)).sort();
-  const orderedCats = [...knownCats, ...unknownCats];
-  const catScores = orderedCats.map((c) => ({ category: c, info: categoryScore(byCat[c]) }));
+  const renderGroup = (g, key) => {
+    const score = bioGroupScore(g.items);
+    const sl = bioGroupScoreLabel(score);
+    const need = g.items.filter((i) => i.sev >= 3).length;
+    return html`<div key=${key} style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5 mb-4">
+      <div className="flex flex-col sm:flex-row gap-5">
+        <div className="flex sm:flex-col items-center gap-3 sm:gap-1 shrink-0 sm:w-[110px]">
+          <${ScoreRing} score=${score} color=${sl.c} />
+          <div style=${{ color: sl.c }} className="text-sm font-semibold">${sl.w}</div>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-base font-bold" style=${{ color: C.text }}>${g.name}</div>
+            <div className="text-xs font-semibold" style=${{ color: need ? C.amber : C.green }}>${need ? need + " need attention" : "All in range"}</div>
+          </div>
+          <div className="text-xs mt-1 mb-3" style=${{ color: C.muted }}>${g.desc}</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            ${g.items.map((b) => html`<${GroupMiniCard} key=${g.name + b.name} b=${b} onClick=${() => setModal(b)} />`)}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  };
 
   return html`<div>
-    <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
-      <div>
-        <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Blood Panel</div>
-        <h1 className="text-2xl font-bold mt-1">Biomarkers</h1>
-        <div style=${{ color: C.muted }} className="text-xs mt-1">${parsed.length} markers · <span style=${{ color: C.amber }}>${attention}</span> flagged High/Low</div>
-      </div>
-      <div className="flex flex-col items-end gap-1.5">
-        <span style=${{ color: C.muted }} className="text-[10px] uppercase font-semibold">Sort by</span>
-        <${Pills} options=${["Platform score", "Category"]} value=${sortBy} onChange=${setSortBy} />
-      </div>
-    </div>
-
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
-      ${catScores.map((cs) => html`<${CategoryScoreTile} key=${cs.category} category=${cs.category} info=${cs.info} />`)}
-    </div>
-    <div className="flex flex-wrap gap-4 mb-4 text-[11px]" style=${{ color: C.muted }}>
-      <span><span style=${{ color: C.green }}>●</span> Optimal</span>
-      <span><span style=${{ color: C.amber }}>●</span> Watch</span>
-      <span><span style=${{ color: "#fb923c" }}>●</span> Concerning</span>
-      <span><span style=${{ color: C.red }}>●</span> Critical</span>
+    <div className="mb-4">
+      <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Blood Panel</div>
+      <h1 className="text-2xl font-bold mt-1">Biomarkers</h1>
+      <div style=${{ color: C.muted }} className="text-xs mt-1">Latest results · ${latestStr} · <span style=${{ color: C.amber }}>${attention} markers</span> flagged High/Low · grouped by performance area</div>
     </div>
 
     <div style=${{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10 }} className="p-3 mb-4 text-xs">
       <span style=${{ color: C.red }} className="font-semibold">Educational only — not medical advice. </span>
-      <span style=${{ color: C.muted }}>Ranges blend clinical and longevity/athlete targets. Discuss anything flagged with a doctor before making changes.</span>
+      <span style=${{ color: C.muted }}>Category scores are derived from how many markers sit in range. The same marker can appear in several areas. Tap any marker to see its trend over time. Discuss anything flagged with a doctor.</span>
     </div>
 
     <div className="flex flex-wrap gap-3 mb-4 text-[11px]" style=${{ color: C.muted }}>
-      <span><span style=${{ color: "#ef4444" }}>■</span> Very high / very low</span>
-      <span><span style=${{ color: "#f97316" }}>■</span> High / low</span>
-      <span><span style=${{ color: "#eab308" }}>■</span> Moderately high / low</span>
       <span><span style=${{ color: "#34d399" }}>■</span> Optimal</span>
+      <span><span style=${{ color: "#6ee7b7" }}>■</span> Moderately high / low</span>
+      <span><span style=${{ color: "#a7f3d0" }}>■</span> High / low</span>
+      <span><span style=${{ color: "#d1fae5" }}>■</span> Very high / very low</span>
     </div>
 
-    ${groups.map((g, gi) => html`<div key=${gi}>
-      ${g.category ? html`<div style=${{ color: C.text, borderBottom: "1px solid " + C.border }} className="text-sm font-semibold mt-5 mb-3 pb-2">${g.category}</div>` : null}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-        ${g.items.map((b) => html`<${BiomarkerCard} key=${b.name} b=${b} />`)}
+    ${perfGroups.map((g, i) => renderGroup(g, "p" + i))}
+
+    ${extraGroups.length ? html`<div style=${{ color: C.text, borderBottom: "1px solid " + C.border }} className="text-sm font-semibold mt-6 mb-3 pb-2">Additional markers</div>` : null}
+    ${extraGroups.length ? html`<div style=${{ color: C.muted }} className="text-xs mb-3">Markers from your panel that aren't part of a performance category above, grouped by clinical type.</div>` : null}
+    ${extraGroups.map((g, i) => renderGroup(g, "e" + i))}
+
+    ${modal ? html`<div onClick=${() => setModal(null)} style=${{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 50 }} className="flex items-start justify-center p-4 overflow-auto">
+      <div onClick=${(e) => e.stopPropagation()} style=${{ maxWidth: 680, width: "100%" }} className="mt-8">
+        <div className="flex justify-end mb-2">
+          <button onClick=${() => setModal(null)} style=${{ background: C.card, border: "1px solid " + C.border, color: C.text, borderRadius: 999 }} className="text-xs font-semibold px-3 py-1.5">✕ Close</button>
+        </div>
+        <${MarkerDetail} b=${modal} />
       </div>
-    </div>`)}
+    </div>` : null}
   </div>`;
 }
 
