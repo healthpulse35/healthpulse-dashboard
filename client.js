@@ -967,6 +967,39 @@ function App() {
     return [Math.floor(Math.min(...vals) - 6), Math.ceil(Math.max(...vals) + 6)];
   }, [hrvSeries, showRaw]);
 
+  // Vertical gradient stops for the Form line so each segment is coloured
+  // by the band it passes through. SVG gradient `objectBoundingBox` maps
+  // offset 0→top of bbox (= line's max form value) and 100→bottom (min),
+  // so we convert each band threshold within the data range into a stop.
+  const formGradStops = useMemo(() => {
+    let lo = Infinity, hi = -Infinity;
+    for (const d of view) {
+      if (d.form != null) {
+        if (d.form < lo) lo = d.form;
+        if (d.form > hi) hi = d.form;
+      }
+    }
+    if (lo === Infinity) return [];
+    const span = (hi - lo) || 1;
+    const toPct = (y) => 100 * (hi - y) / span;
+    const bands = [
+      { lo: 20, hi: Infinity, color: C.amber },
+      { lo: 5, hi: 20, color: C.cyan },
+      { lo: -10, hi: 5, color: C.muted },
+      { lo: -30, hi: -10, color: C.green },
+      { lo: -Infinity, hi: -30, color: C.red },
+    ];
+    const stops = [];
+    for (const band of bands) {
+      const top = Math.min(hi, band.hi);
+      const bottom = Math.max(lo, band.lo);
+      if (bottom >= top) continue;
+      stops.push({ offset: toPct(top), color: band.color });
+      stops.push({ offset: toPct(bottom), color: band.color });
+    }
+    return stops;
+  }, [view]);
+
   // Tight y-domain for Fitness & Fatigue so small day-to-day moves are
   // visible — round each end to the nearest 5 with a small pad, clamped
   // at 0 (CTL/ATL can't go negative).
@@ -1147,6 +1180,11 @@ function App() {
         <//>
         <${ResponsiveContainer} width="100%" height=${150}>
           <${LineChart} data=${view} syncId="ff" margin=${{ top: 4, right: 12, left: -12, bottom: 0 }}>
+            <defs>
+              <linearGradient id="gFormBand" x1="0" y1="0" x2="0" y2="1">
+                ${formGradStops.map((s, i) => html`<stop key=${i} offset=${s.offset + "%"} stopColor=${s.color} />`)}
+              </linearGradient>
+            </defs>
             <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.22} />
             <${ReferenceArea} y1=${5} y2=${20} fill=${C.cyan} fillOpacity=${0.22} />
             <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.22} />
@@ -1158,7 +1196,9 @@ function App() {
             <${Tooltip} content=${h(TT)} />
             <${ReferenceLine} y=${0} stroke=${C.border} />
             ${raceLines(view, races)}
-            <${Line} type="monotone" dataKey="form" name="Form" stroke="#e6eaf0" strokeWidth=${1.8} dot=${false} />
+            <${Line} type="monotone" dataKey="form" name="Form"
+              stroke=${formGradStops.length ? "url(#gFormBand)" : "#e6eaf0"}
+              strokeWidth=${1.8} dot=${false} />
           <//>
         <//>
         <div className="text-[11px] mt-3" style=${{ color: C.muted, lineHeight: 1.5 }}>
