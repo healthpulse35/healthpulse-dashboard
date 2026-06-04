@@ -1194,7 +1194,14 @@ function getRecScatterPoints(recs) {
   return out;
 }
 
+// Smooth-scroll to a rec card by id. Cards are rendered with id="rec-<id>".
+function scrollToRec(id) {
+  const el = typeof document !== "undefined" && document.getElementById("rec-" + id);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function ImpactEffortMap({ recs }) {
+  const [hover, setHover] = useState(-1);
   const W = 600, H = 460;
   const padL = 50, padR = 30, padT = 30, padB = 70;
   const plotW = W - padL - padR;
@@ -1203,6 +1210,19 @@ function ImpactEffortMap({ recs }) {
   const py = (y) => padT + ((100 - y) / 100) * plotH;
   const points = getRecScatterPoints(recs);
   const midY = padT + plotH / 2;
+
+  // Hover label position (next to the hovered dot, flipped if near the
+  // right edge so it doesn't run off the SVG).
+  let tip = null;
+  if (hover >= 0) {
+    const cx = px(points[hover].x), cy = py(points[hover].y);
+    const title = recs[hover].title;
+    const w = title.length * 6.6 + 16;
+    const right = cx + 24 + w < W - 8;
+    const x = right ? cx + 22 : cx - 22;
+    tip = { x, y: cy, title, w, right, color: recs[hover].accent };
+  }
+
   return html`<svg viewBox=${"0 0 " + W + " " + H} className="w-full" style=${{ maxHeight: 480 }}>
     <rect x=${padL} y=${padT} width=${plotW / 2} height=${plotH / 2} fill="#5eead4" opacity=${0.06} />
     <line x1=${padL} y1=${padT + plotH} x2=${padL + plotW} y2=${padT + plotH} stroke=${C.border} strokeWidth=${1} />
@@ -1218,17 +1238,27 @@ function ImpactEffortMap({ recs }) {
     ${points.map((p, i) => {
       const cx = px(p.x), cy = py(p.y);
       const r = recs[i];
-      return html`<g key=${i}>
+      return html`<g key=${i}
+          onMouseEnter=${() => setHover(i)}
+          onMouseLeave=${() => setHover(-1)}
+          onClick=${() => scrollToRec(r.id)}
+          style=${{ cursor: "pointer" }}>
         <circle cx=${cx} cy=${cy} r=${18} fill="none" stroke=${r.accent} opacity=${0.28} strokeWidth=${2} />
         <circle cx=${cx} cy=${cy} r=${14} fill=${r.accent} />
-        <text x=${cx} y=${cy + 1} fill="#ffffff" fontSize=${13} fontWeight=${700} textAnchor="middle" dominantBaseline="central">${i + 1}</text>
+        <text x=${cx} y=${cy + 1} fill="#ffffff" fontSize=${13} fontWeight=${700} textAnchor="middle" dominantBaseline="central" pointerEvents="none">${i + 1}</text>
       </g>`;
     })}
+    ${tip ? html`<g pointerEvents="none">
+      <rect x=${tip.right ? tip.x : tip.x - tip.w} y=${tip.y - 13} width=${tip.w} height=${26} rx=${5}
+        fill=${C.card} stroke=${tip.color} strokeWidth=${1} opacity=${0.96} />
+      <text x=${tip.right ? tip.x + 8 : tip.x - 8} y=${tip.y + 1} fill=${C.text} fontSize=${12} fontWeight=${500}
+        textAnchor=${tip.right ? "start" : "end"} dominantBaseline="central">${tip.title}</text>
+    </g>` : null}
   </svg>`;
 }
 
 function RecCard({ r }) {
-  return html`<div className="rounded-2xl overflow-hidden"
+  return html`<div id=${"rec-" + r.id} className="rounded-2xl overflow-hidden scroll-mt-4"
     style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + r.accent }}>
     <div className="p-5">
       <div className="flex items-start gap-3 mb-4">
@@ -1366,10 +1396,14 @@ function RecommendationsView() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
         <${ImpactEffortMap} recs=${recs} />
         <div className="flex flex-col gap-3">
-          ${recs.map((r, i) => html`<div key=${i} className="flex items-center gap-3">
+          ${recs.map((r, i) => html`<button key=${i} onClick=${() => scrollToRec(r.id)}
+              className="flex items-center gap-3 text-left rounded-lg p-1 -m-1 transition-colors"
+              style=${{ background: "transparent", border: "none", cursor: "pointer" }}
+              onMouseEnter=${(e) => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
+              onMouseLeave=${(e) => e.currentTarget.style.background = "transparent"}>
             <div style=${{ width: 30, height: 30, borderRadius: 99, background: r.accent, color: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>${i + 1}</div>
             <span className="text-sm" style=${{ color: C.text }}>${r.title}</span>
-          </div>`)}
+          </button>`)}
         </div>
       </div>
     </div>` : null}
