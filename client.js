@@ -623,8 +623,8 @@ function BioTrend({ b }) {
             tickFormatter=${fmtNum} tick=${{ fill: C.muted, fontSize: 10 }}
             tickLine=${false} axisLine=${false} width=${42} />
           <${Tooltip} content=${h(BioTT, { units: b.units, labelMap: b.labelByX })} />
-          <${Line} type="monotone" dataKey="value" stroke=${C.text} strokeWidth=${2} isAnimationActive=${false} connectNulls=${true}
-            dot=${{ r: 4, fill: C.text, stroke: C.bg, strokeWidth: 2 }} activeDot=${{ r: 5 }} />
+          <${Line} type="monotone" dataKey="value" stroke=${C.text} strokeWidth=${2.5} isAnimationActive=${false} connectNulls=${true}
+            dot=${{ r: 4, fill: C.text, stroke: C.card, strokeWidth: 1.5 }} activeDot=${{ r: 6, fill: C.text, stroke: C.card }} />
         <//>
       <//>
     </div>
