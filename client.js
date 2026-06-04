@@ -1996,7 +1996,7 @@ function App() {
               )}
             <//>
           <//>
-          <div className="flex flex-wrap gap-3 mt-3 text-[11px]" style=${{ color: C.text }}>
+          <div className="flex flex-wrap gap-3 mt-3 text-[11px]">
             ${zoneName.map((n, i) => {
               // Standard Garmin / % of Max-HR zone model. Edges:
               // Z1 <60% · Z2 60-70% · Z3 70-80% · Z4 80-90% · Z5 ≥90%.
@@ -2009,8 +2009,8 @@ function App() {
                       : `${Math.round(RAW.maxHr * pct[0] / 100)}–${Math.round(RAW.maxHr * pct[1] / 100)} bpm`)
                 : `${pct[0]}–${pct[1]}% max HR`;
               return html`<div key=${n} className="flex flex-col">
-                <span><span style=${{ color: zoneColor[i] }}>■</span> ${n}</span>
-                <span style=${{ color: C.muted, fontSize: 10 }} className="ml-3">${range}</span>
+                <span style=${{ color: C.text, fontWeight: 600 }}><span style=${{ color: zoneColor[i] }}>■</span> ${n}</span>
+                <span style=${{ color: C.text, fontSize: 10, opacity: 0.7 }} className="ml-3">${range}</span>
               </div>`;
             })}
           </div>
