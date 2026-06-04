@@ -21,11 +21,47 @@ const html = htm.bind(React.createElement);
 const h = React.createElement;
 
 // ---------- theme + constants ----------
-const C = {
-  bg: "#0a0d12", card: "#12161e", border: "#222a36", muted: "#7c8696",
-  text: "#e6eaf0", cyan: "#2dd4ee", green: "#34d399", red: "#f87171",
-  amber: "#fbbf24", violet: "#a78bfa", teal: "#5eead4", grid: "#1b212b",
+// Two named palettes; C below is a Proxy that always reads from whichever
+// is active. Switching themes mutates _theme and forces a re-render at
+// the App level — every component re-reads C through the Proxy and so
+// picks up the new colours without any per-component refactor.
+const THEMES = {
+  dark: {
+    bg: "#0a0d12", card: "#12161e", border: "#222a36", muted: "#7c8696",
+    text: "#e6eaf0", cyan: "#2dd4ee", green: "#34d399", red: "#f87171",
+    amber: "#fbbf24", violet: "#a78bfa", teal: "#5eead4", grid: "#1b212b",
+  },
+  light: {
+    bg: "#f5f7fa", card: "#ffffff", border: "#dde3ec", muted: "#5e6b7c",
+    text: "#0f1722", cyan: "#0891b2", green: "#16a34a", red: "#dc2626",
+    amber: "#d97706", violet: "#7c3aed", teal: "#0d9488", grid: "#eef1f5",
+  },
 };
+const THEME_KEY = "hp_theme_v1";
+let _theme = "dark";
+try {
+  const saved = typeof localStorage !== "undefined" && localStorage.getItem(THEME_KEY);
+  if (saved === "light" || saved === "dark") _theme = saved;
+} catch { /* ignore */ }
+function applyTheme(t) {
+  _theme = (t === "light") ? "light" : "dark";
+  try { localStorage.setItem(THEME_KEY, _theme); } catch { /* ignore */ }
+  if (typeof document !== "undefined" && document.body) {
+    document.body.style.background = THEMES[_theme].bg;
+    document.body.style.color = THEMES[_theme].text;
+    const root = document.getElementById("root");
+    if (root) root.style.background = THEMES[_theme].bg;
+    document.documentElement.style.background = THEMES[_theme].bg;
+  }
+}
+const C = new Proxy({}, {
+  get(_t, key) { return THEMES[_theme][key]; },
+  has(_t, key) { return key in THEMES[_theme]; },
+  ownKeys() { return Object.keys(THEMES[_theme]); },
+  getOwnPropertyDescriptor() { return { enumerable: true, configurable: true }; },
+});
+// Apply the persisted theme immediately so the first paint matches.
+applyTheme(_theme);
 const sportColor = { Run: "#34d399", Bike: "#2dd4ee", Swim: "#818cf8", Strength: "#fbbf24", Other: "#9aa6b6" };
 const zoneColor = ["#5b6b82", "#34d399", "#fbbf24", "#fb923c", "#f87171"];
 const zoneKeys = ["Z1", "Z2", "Z3", "Z4", "Z5"];
@@ -119,7 +155,12 @@ function bucketize(view, gran) {
   });
 }
 
-const axis = { stroke: C.muted, fontSize: 11 };
+// Proxy so `stroke` re-reads from the live theme; Recharts spreads this
+// onto tick props so each render picks up the current C.muted. The
+// underlying object lists `stroke` so it's enumerable for spreads.
+const axis = new Proxy({ fontSize: 11, stroke: "" }, {
+  get(t, k) { return k === "stroke" ? C.muted : t[k]; },
+});
 
 // Pick out a representative label for each year transition in `series`.
 // Works for any series whose items carry either a `.date` (view rows, AE)
@@ -255,7 +296,7 @@ const Pills = ({ options, value, onChange }) =>
 
 const TT = ({ active, payload, label, fmt }) => {
   if (!active || !payload || !payload.length) return null;
-  return html`<div style=${{ background: "#0c1117", border: "1px solid " + C.border, borderRadius: 8 }} className="px-3 py-2 text-xs">
+  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 8 }} className="px-3 py-2 text-xs">
     <div style=${{ color: C.muted }} className="mb-1">${label}</div>
     ${payload.filter((p) => p.value != null).map((p, i) =>
       html`<div key=${i} style=${{ color: p.color || p.stroke || p.fill }}>${p.name}: <span className="font-semibold">${fmt ? fmt(p.value) : p.value}</span></div>`
@@ -266,7 +307,7 @@ const TT = ({ active, payload, label, fmt }) => {
 const ZoneTT = ({ active, payload, label }) => {
   if (!active || !payload || !payload.length) return null;
   const total = payload.reduce((s, p) => s + (p.value || 0), 0);
-  return html`<div style=${{ background: "#0c1117", border: "1px solid " + C.border, borderRadius: 8 }} className="px-3 py-2 text-xs">
+  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 8 }} className="px-3 py-2 text-xs">
     <div style=${{ color: C.muted }} className="mb-1">${label}</div>
     ${payload.slice().reverse().map((p, i) =>
       html`<div key=${i} style=${{ color: p.fill }}>${p.name}: <span className="font-semibold">${p.value.toFixed(1)} h</span></div>`
@@ -532,7 +573,7 @@ function Expand({ label, children }) {
 
 const BioTT = ({ active, payload, label, units, labelMap }) => {
   if (!active || !payload || !payload.length || payload[0].value == null) return null;
-  return html`<div style=${{ background: "#0c1117", border: "1px solid " + C.border, borderRadius: 8 }} className="px-3 py-2 text-xs">
+  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 8 }} className="px-3 py-2 text-xs">
     <div style=${{ color: C.muted }} className="mb-0.5">${labelMap ? labelMap[label] : label}</div>
     <div style=${{ color: C.text }} className="font-semibold">${payload[0].value} <span style=${{ color: C.muted }} className="font-normal">${units}</span></div>
   </div>`;
@@ -1399,7 +1440,7 @@ function RecommendationsView() {
           ${recs.map((r, i) => html`<button key=${i} onClick=${() => scrollToRec(r.id)}
               className="flex items-center gap-3 text-left rounded-lg p-1 -m-1 transition-colors"
               style=${{ background: "transparent", border: "none", cursor: "pointer" }}
-              onMouseEnter=${(e) => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
+              onMouseEnter=${(e) => e.currentTarget.style.background = "rgba(127,127,127,0.08)"}
               onMouseLeave=${(e) => e.currentTarget.style.background = "transparent"}>
             <div style=${{ width: 30, height: 30, borderRadius: 99, background: r.accent, color: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>${i + 1}</div>
             <span className="text-sm" style=${{ color: C.text }}>${r.title}</span>
@@ -1458,6 +1499,12 @@ function RecommendationsView() {
 // ---------- main ----------
 function App() {
   const [tab, setTab] = useState("Training");
+  const [theme, setTheme] = useState(_theme);
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    applyTheme(next);
+    setTheme(next);
+  };
   const [range, setRange] = useState("6M");
   const [volGran, setVolGran] = useState("Weekly");
   const [zoneGran, setZoneGran] = useState("Weekly");
@@ -1721,13 +1768,22 @@ function App() {
 
   // Tab bar — always rendered; the Training-only floating range selector
   // is conditioned on the active tab so it doesn't show on Biomarkers.
-  const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4" style=${{ borderBottom: "1px solid " + C.border }}>
-    ${["Training", "Biomarkers", "Recommendations"].map((t) => {
-      const on = t === tab;
-      return html`<button key=${t} onClick=${() => setTab(t)}
-        style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1 }}
-        className="px-4 py-2.5 text-sm font-semibold transition-colors">${t}</button>`;
-    })}
+  const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4 flex items-center justify-between" style=${{ borderBottom: "1px solid " + C.border }}>
+    <div>
+      ${["Training", "Biomarkers", "Recommendations"].map((t) => {
+        const on = t === tab;
+        return html`<button key=${t} onClick=${() => setTab(t)}
+          style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1, background: "transparent" }}
+          className="px-4 py-2.5 text-sm font-semibold transition-colors">${t}</button>`;
+      })}
+    </div>
+    <button onClick=${toggleTheme}
+      title=${theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      style=${{ background: "transparent", color: C.muted, border: "1px solid " + C.border, borderRadius: 999 }}
+      className="px-3 py-1.5 text-xs font-semibold transition-colors mr-1 mb-2 flex items-center gap-1.5">
+      <span style=${{ fontSize: 14 }}>${theme === "dark" ? "☀" : "☾"}</span>
+      <span>${theme === "dark" ? "Light" : "Dark"}</span>
+    </button>
   </div>`;
 
   return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-2 sm:p-6">
