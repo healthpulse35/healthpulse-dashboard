@@ -471,7 +471,12 @@ function parseBio(b) {
     }
     if (bandIdx === -1) bandIdx = value < ranges[0].lo ? 0 : 6;
   }
-  const score = b.platform_score || (bandIdx >= 0 ? ["Very Low","Low","Moderately Low","Optimal","Moderately High","High","Very High"][bandIdx] : "N/A");
+  // Always derive the score label from the band the current value falls in
+  // — the DB-supplied platform_score sometimes disagrees with the bands we
+  // render, which produced "Low" badges sitting in the green band on screen.
+  const score = bandIdx >= 0
+    ? ["Very Low","Low","Moderately Low","Optimal","Moderately High","High","Very High"][bandIdx]
+    : (b.platform_score || "N/A");
   const sev = BIO_SCORE_SEV[score] ?? 0;
   const color = BIO_SCORE_COLOR[score] ?? C.muted;
   // Render-friendly history: each entry gets an x-index and a label.
