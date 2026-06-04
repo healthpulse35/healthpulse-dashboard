@@ -1165,70 +1165,65 @@ function RecChip({ m }) {
 }
 
 // Impact/effort coordinates per rule (0-100, where x=effort, y=impact).
-// Top-left of the grid = quick wins, top-right = big projects.
-const REC_IMPACT_XY = { "High": 85, "Medium": 55, "Low": 25 };
+// Top-left of the grid = quick wins, top-right = big bets.
+const REC_IMPACT_XY = { "High": 78, "Medium": 50, "Low": 22 };
 const REC_EFFORT_XY = { "Low": 22, "Medium": 50, "High": 78 };
 
-// Push overlapping labels apart vertically and flip a label to the
-// left of its dot if it'd run off the right edge. Mirrors the template
-// implementation so the scatter stays readable when several recs cluster.
-function layoutRecLabels(pts, px, py, W, H, pad) {
-  const charW = 6.1, minV = 17, lead = 14;
-  const L = pts.map((p) => {
-    const cx = px(p.x), cy = py(p.y);
-    const w = p.label.length * charW;
-    const right = cx + lead + w + 6 <= W - 4;
-    const anchorX = right ? cx + lead : cx - lead;
-    return { ...p, cx, cy, right, anchorX,
-      x0: right ? anchorX : anchorX - w,
-      x1: right ? anchorX + w : anchorX,
-      ly: cy };
+// When several recs share the same (impact, effort) bucket they'd overlap
+// on the scatter. Distribute them around a small circle around the base.
+function getRecScatterPoints(recs) {
+  const buckets = {};
+  recs.forEach((_, i) => {
+    const key = recs[i].impact + "|" + recs[i].effort;
+    (buckets[key] ??= []).push(i);
   });
-  for (let pass = 0; pass < 80; pass++) {
-    L.sort((a, b) => a.ly - b.ly);
-    let moved = false;
-    for (let i = 0; i < L.length; i++) {
-      for (let j = i + 1; j < L.length; j++) {
-        const a = L[i], b = L[j];
-        if (a.x0 < b.x1 && b.x0 < a.x1 && b.ly - a.ly < minV) {
-          const push = (minV - (b.ly - a.ly)) / 2 + 0.5;
-          a.ly -= push; b.ly += push; moved = true;
-        }
-      }
+  const out = new Array(recs.length);
+  for (const indices of Object.values(buckets)) {
+    const baseX = REC_EFFORT_XY[recs[indices[0]].effort] ?? 50;
+    const baseY = REC_IMPACT_XY[recs[indices[0]].impact] ?? 50;
+    if (indices.length === 1) {
+      out[indices[0]] = { x: baseX, y: baseY };
+    } else {
+      const radius = 7;
+      indices.forEach((idx, k) => {
+        const angle = (k / indices.length) * 2 * Math.PI - Math.PI / 2;
+        out[idx] = { x: baseX + radius * Math.cos(angle), y: baseY + radius * Math.sin(angle) };
+      });
     }
-    for (const l of L) l.ly = Math.max(pad + 8, Math.min(H - pad - 6, l.ly));
-    if (!moved) break;
   }
-  return L;
+  return out;
 }
 
 function ImpactEffortMap({ recs }) {
-  const W = 640, H = 360, pad = 50;
-  const px = (x) => pad + (x / 100) * (W - pad * 2);
-  const py = (y) => H - pad - (y / 100) * (H - pad * 2);
-  const pts = recs.map((r) => ({
-    label: r.title.length > 28 ? r.title.slice(0, 26) + "…" : r.title,
-    x: REC_EFFORT_XY[r.effort] ?? 50,
-    y: REC_IMPACT_XY[r.impact] ?? 50,
-    c: r.accent,
-  }));
-  const labels = layoutRecLabels(pts, px, py, W, H, pad);
-  return html`<svg viewBox=${"0 0 " + W + " " + H} className="w-full" style=${{ maxHeight: 380 }}>
-    <rect x=${pad} y=${pad} width=${(W - pad * 2) / 2} height=${(H - pad * 2) / 2} fill="#5eead4" opacity=${0.06} />
-    <text x=${px(13)} y=${py(96)} fill="#5eead4" fontSize="11.5" fontWeight="600" opacity=${0.8}>QUICK WINS</text>
-    <text x=${px(60)} y=${py(96)} fill=${C.muted} fontSize="11.5">BIG PROJECTS</text>
-    <line x1=${pad} y1=${H - pad} x2=${W - pad} y2=${H - pad} stroke=${C.border} strokeWidth=${1} />
-    <line x1=${pad} y1=${pad} x2=${pad} y2=${H - pad} stroke=${C.border} strokeWidth=${1} />
-    <line x1=${px(50)} y1=${pad} x2=${px(50)} y2=${H - pad} stroke=${C.border} strokeWidth=${1} strokeDasharray="3 4" />
-    <line x1=${pad} y1=${py(50)} x2=${W - pad} y2=${py(50)} stroke=${C.border} strokeWidth=${1} strokeDasharray="3 4" />
-    <text x=${pad} y=${H - pad + 24} fill=${C.muted} fontSize="11.5">Effort →</text>
-    <text x=${pad - 10} y=${pad - 16} fill=${C.muted} fontSize="11.5">Impact ↑</text>
-    ${labels.map((p, i) => html`<line key=${"ld" + i} x1=${p.cx} y1=${p.cy} x2=${p.anchorX} y2=${p.ly} stroke=${p.c} strokeWidth=${1} opacity=${0.35} />`)}
-    ${labels.map((p, i) => html`<g key=${i}>
-      <circle cx=${p.cx} cy=${p.cy} r=${7} fill=${p.c} />
-      <circle cx=${p.cx} cy=${p.cy} r=${11} fill="none" stroke=${p.c} opacity=${0.3} strokeWidth=${1.5} />
-      <text x=${p.anchorX + (p.right ? 5 : -5)} y=${p.ly} fill=${C.muted} fontSize="12" textAnchor=${p.right ? "start" : "end"} dominantBaseline="middle">${p.label}</text>
-    </g>`)}
+  const W = 600, H = 460;
+  const padL = 50, padR = 30, padT = 30, padB = 70;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const px = (x) => padL + (x / 100) * plotW;
+  const py = (y) => padT + ((100 - y) / 100) * plotH;
+  const points = getRecScatterPoints(recs);
+  const midY = padT + plotH / 2;
+  return html`<svg viewBox=${"0 0 " + W + " " + H} className="w-full" style=${{ maxHeight: 480 }}>
+    <rect x=${padL} y=${padT} width=${plotW / 2} height=${plotH / 2} fill="#5eead4" opacity=${0.06} />
+    <line x1=${padL} y1=${padT + plotH} x2=${padL + plotW} y2=${padT + plotH} stroke=${C.border} strokeWidth=${1} />
+    <line x1=${padL} y1=${padT} x2=${padL} y2=${padT + plotH} stroke=${C.border} strokeWidth=${1} />
+    <line x1=${px(50)} y1=${padT} x2=${px(50)} y2=${padT + plotH} stroke=${C.border} strokeWidth=${1} strokeDasharray="3 4" />
+    <line x1=${padL} y1=${py(50)} x2=${padL + plotW} y2=${py(50)} stroke=${C.border} strokeWidth=${1} strokeDasharray="3 4" />
+    <text x=${padL + 12} y=${padT + 22} fill="#5eead4" fontSize=${12} fontWeight=${700} opacity=${0.85} letterSpacing=${1.5}>QUICK WINS</text>
+    <text x=${padL + plotW - 12} y=${padT + 22} fill=${C.muted} fontSize=${12} fontWeight=${600} opacity=${0.65} letterSpacing=${1.5} textAnchor="end">BIG BETS</text>
+    <text x=${padL + 12} y=${padT + plotH - 10} fill=${C.muted} fontSize=${12} fontWeight=${600} opacity=${0.65} letterSpacing=${1.5}>EASY EXTRAS</text>
+    <text x=${padL + plotW - 12} y=${padT + plotH - 10} fill=${C.muted} fontSize=${12} fontWeight=${600} opacity=${0.65} letterSpacing=${1.5} textAnchor="end">LOW PRIORITY</text>
+    <text x=${22} y=${midY} fill=${C.muted} fontSize=${11} letterSpacing=${1.5} textAnchor="middle" transform=${"rotate(-90, 22, " + midY + ")"}>IMPACT ↑</text>
+    <text x=${padL + plotW / 2} y=${padT + plotH + 38} fill=${C.muted} fontSize=${11} letterSpacing=${1.5} textAnchor="middle">EFFORT →</text>
+    ${points.map((p, i) => {
+      const cx = px(p.x), cy = py(p.y);
+      const r = recs[i];
+      return html`<g key=${i}>
+        <circle cx=${cx} cy=${cy} r=${18} fill="none" stroke=${r.accent} opacity=${0.28} strokeWidth=${2} />
+        <circle cx=${cx} cy=${cy} r=${14} fill=${r.accent} />
+        <text x=${cx} y=${cy + 1} fill="#ffffff" fontSize=${13} fontWeight=${700} textAnchor="middle" dominantBaseline="central">${i + 1}</text>
+      </g>`;
+    })}
   </svg>`;
 }
 
@@ -1367,8 +1362,16 @@ function RecommendationsView() {
 
     ${recs.length >= 2 && filter === "All" ? html`<div className="rounded-2xl p-5 mb-5" style=${{ background: C.card, border: "1px solid " + C.border }}>
       <div className="text-base font-semibold" style=${{ color: C.text }}>Where to start — impact vs effort</div>
-      <p className="text-xs mt-1 mb-3" style=${{ color: C.muted }}>Top-left = biggest return for the least work. Start there.</p>
-      <${ImpactEffortMap} recs=${recs} />
+      <p className="text-xs mt-1 mb-4" style=${{ color: C.muted }}>Top-left = biggest return for the least work. Start there.</p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
+        <${ImpactEffortMap} recs=${recs} />
+        <div className="flex flex-col gap-3">
+          ${recs.map((r, i) => html`<div key=${i} className="flex items-center gap-3">
+            <div style=${{ width: 30, height: 30, borderRadius: 99, background: r.accent, color: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>${i + 1}</div>
+            <span className="text-sm" style=${{ color: C.text }}>${r.title}</span>
+          </div>`)}
+        </div>
+      </div>
     </div>` : null}
 
     ${shown.length === 0 ? html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5 text-sm">
