@@ -524,37 +524,51 @@ const BioTT = ({ active, payload, label, units, labelMap }) => {
   </div>`;
 };
 
+// Inside-Tracker-style trend chart: a vertical gradient bar on the left
+// (very-low → optimal → very-high in band colors), a single soft-green
+// ReferenceArea for the Optimal zone, and bare YAxis ticks at the four
+// key thresholds (domain top, optimal hi, optimal lo, domain bottom).
 function BioTrend({ b }) {
-  return html`<div className="flex flex-col sm:flex-row gap-3 mt-3">
+  const [domLo, domHi] = b.yDomain;
+  const span = (domHi - domLo) || 1;
+  const pctFromTop = (v) => 100 * (domHi - v) / span;
+  const optHi = b.ranges[3].hi;
+  const optLo = b.ranges[3].lo;
+
+  // CSS gradient stops: screen-top = domHi, screen-bottom = domLo. Each band
+  // gets a solid run from its top edge to its bottom edge.
+  const stops = [];
+  let cursor = 0;
+  for (let i = 6; i >= 0; i--) {
+    const next = i === 0 ? 100 : pctFromTop(b.ranges[i].lo);
+    stops.push(b.ranges[i].color + " " + cursor.toFixed(2) + "%");
+    stops.push(b.ranges[i].color + " " + next.toFixed(2) + "%");
+    cursor = next;
+  }
+  const grad = "linear-gradient(to bottom, " + stops.join(", ") + ")";
+
+  const fmtNum = (v) => Math.round(v * 100) / 100;
+  const CHART_H = 220, XAXIS_H = 22;
+
+  return html`<div className="flex mt-3" style=${{ gap: 6, height: CHART_H }}>
+    <div style=${{ width: 7, borderRadius: 3, background: grad, marginTop: 4, marginBottom: XAXIS_H, flexShrink: 0 }} />
     <div style=${{ flex: 1, minWidth: 0 }}>
-      <${ResponsiveContainer} width="100%" height=${150}>
-        <${LineChart} data=${b.series} margin=${{ top: 6, right: 10, left: -14, bottom: 0 }}>
-          ${b.ranges.map((r, i) => html`<${ReferenceArea} key=${i} y1=${i === 0 ? b.yDomain[0] : r.lo} y2=${i === 6 ? b.yDomain[1] : r.hi} fill=${r.color} fillOpacity=${i === 3 ? 0.5 : 0.36} />`)}
-          <${CartesianGrid} stroke="rgba(255,255,255,0.06)" vertical=${false} />
+      <${ResponsiveContainer} width="100%" height=${CHART_H}>
+        <${LineChart} data=${b.series} margin=${{ top: 4, right: 16, left: 0, bottom: 0 }}>
+          <${ReferenceArea} y1=${optLo} y2=${optHi} fill="#34d399" fillOpacity=${0.10} />
+          <${ReferenceLine} y=${optHi} stroke="rgba(255,255,255,0.08)" />
+          <${ReferenceLine} y=${optLo} stroke="rgba(255,255,255,0.08)" />
           <${XAxis} type="number" dataKey="x" domain=${b.xDomain} ticks=${b.xticks} interval=${0}
-            tickFormatter=${(x) => b.labelByX[x] || ""} tick=${{ fill: C.muted, fontSize: 10 }} tickLine=${false} axisLine=${{ stroke: C.border }} />
-          <${YAxis} domain=${b.yDomain} tick=${{ fill: C.muted, fontSize: 10 }} tickLine=${false} axisLine=${false} width=${36} />
+            tickFormatter=${(x) => b.labelByX[x] || ""} tick=${{ fill: C.muted, fontSize: 10 }}
+            tickLine=${false} axisLine=${{ stroke: C.border }} height=${XAXIS_H} />
+          <${YAxis} domain=${b.yDomain} ticks=${[domLo, optLo, optHi, domHi]}
+            tickFormatter=${fmtNum} tick=${{ fill: C.muted, fontSize: 10 }}
+            tickLine=${false} axisLine=${false} width=${42} />
           <${Tooltip} content=${h(BioTT, { units: b.units, labelMap: b.labelByX })} />
           <${Line} type="monotone" dataKey="value" stroke="#ffffff" strokeWidth=${2} isAnimationActive=${false} connectNulls=${true}
             dot=${{ r: 4, fill: "#ffffff", stroke: C.bg, strokeWidth: 2 }} activeDot=${{ r: 5 }} />
         <//>
       <//>
-    </div>
-    <div className="sm:w-[150px] shrink-0">
-      <div style=${{ color: C.muted, letterSpacing: "0.08em" }} className="text-[9px] uppercase font-semibold mb-1">Ranges · ${b.units || ""}</div>
-      <div className="flex flex-col gap-0.5">
-        ${[6,5,4,3,2,1,0].map((i) => {
-          const r = b.ranges[i];
-          const fmtNum = (v) => Math.round(v * 100) / 100;
-          const bound = i === 6 ? (fmtNum(r.lo) + "+") : (fmtNum(r.lo) + "–" + fmtNum(r.hi));
-          const on = b.bandIdx === i;
-          return html`<div key=${i} className="flex items-center gap-2 text-[10px]">
-            <span style=${{ width: 8, height: 8, borderRadius: 2, background: r.color, flexShrink: 0, display: "inline-block", outline: on ? ("1px solid " + C.text) : "none" }}></span>
-            <span style=${{ color: on ? C.text : C.muted, fontWeight: on ? 700 : 400 }} className="flex-1">${r.name}</span>
-            <span style=${{ color: C.muted }}>${bound}</span>
-          </div>`;
-        })}
-      </div>
     </div>
   </div>`;
 }
@@ -618,17 +632,12 @@ function MiniRange({ b }) {
 }
 
 function GroupMiniCard({ b, onClick }) {
-  const what = b.whatItMeasures || "";
-  const short = what.length > 42 ? what.slice(0, 40) + "…" : what;
-  return html`<button onClick=${onClick} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10 }} className="text-left p-3 w-full transition-colors">
-    <div className="flex items-start justify-between gap-2">
-      <div className="min-w-0">
-        <div className="text-sm font-semibold truncate" style=${{ color: C.text }}>${b.name}</div>
-        ${short ? html`<div className="text-[10px] truncate mt-0.5" style=${{ color: C.muted }}>${short}</div>` : null}
-      </div>
-      <div className="text-right shrink-0">
-        <div className="text-sm font-bold" style=${{ color: C.text }}>${b.value != null ? b.value : "—"}<span className="text-[9px] font-normal" style=${{ color: C.muted }}> ${b.units || ""}</span></div>
-        <span style=${{ color: b.color, border: "1px solid " + b.color, borderRadius: 999 }} className="text-[9px] font-semibold px-1.5 py-0.5 inline-block mt-1">${b.score}</span>
+  return html`<button onClick=${onClick} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10 }} className="text-left p-2.5 w-full transition-colors">
+    <div className="min-w-0">
+      <div className="text-[12px] font-semibold truncate" style=${{ color: C.text }}>${b.name}</div>
+      <div className="flex items-baseline justify-between gap-2 mt-1">
+        <div className="text-[13px] font-bold leading-none" style=${{ color: C.text }}>${b.value != null ? b.value : "—"}<span className="text-[9px] font-normal" style=${{ color: C.muted }}> ${b.units || ""}</span></div>
+        <span style=${{ color: b.color, border: "1px solid " + b.color, borderRadius: 999 }} className="text-[9px] font-semibold px-1.5 py-0.5">${b.score}</span>
       </div>
     </div>
     <${MiniRange} b=${b} />
@@ -729,7 +738,7 @@ function BiomarkersView() {
             <div className="text-xs font-semibold" style=${{ color: need ? C.amber : C.green }}>${need ? need + " need attention" : "All in range"}</div>
           </div>
           <div className="text-xs mt-1 mb-3" style=${{ color: C.muted }}>${g.desc}</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
             ${g.items.map((b) => html`<${GroupMiniCard} key=${g.name + b.name} b=${b} onClick=${() => setModal(b)} />`)}
           </div>
         </div>
