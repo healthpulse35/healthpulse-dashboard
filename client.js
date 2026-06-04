@@ -14,6 +14,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ReferenceArea, ReferenceLine, Cell,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
+  Customized,
 } from "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1";
 import htm from "https://esm.sh/htm@3.1.1";
 
@@ -1515,6 +1516,8 @@ function App() {
   const [metric, setMetric] = useState("Load");
   const [showRaw, setShowRaw] = useState(false);
   const [showRawWeight, setShowRawWeight] = useState(false);
+  const [rhrView, setRhrView] = useState("Trend"); // "Trend" | "Periods"
+  const [rhrGran, setRhrGran] = useState("Monthly");
   const [loadView, setLoadView] = useState("Acute load"); // "Acute load" | "Ratio"
   const [fitOverlay, setFitOverlay] = useState("None");
 
@@ -1725,7 +1728,26 @@ function App() {
     return [Math.max(0, Math.floor(Math.min(...vals) - 5)), Math.ceil(Math.max(...vals) + 5)];
   }, [acuteSeries]);
 
-  const rhrSeries = useMemo(() => view.map((d) => ({ label: d.label, rhr: d.rhr })), [view]);
+  const rhrSeries = useMemo(() => view.map((d) => ({ label: d.label, rhr: d.rhr, rhrRaw: d.rhrRaw })), [view]);
+  // Period-averages view: bucket the visible window, compute the mean of
+  // the raw daily RHR per period, then express each period's change vs
+  // the previous (lower = better for RHR, so a negative delta is green).
+  const rhrPeriods = useMemo(() => {
+    if (rhrView !== "Periods") return [];
+    const buckets = bucketize(view, rhrGran);
+    const out = [];
+    for (const b of buckets) {
+      const vals = b.days.map((d) => d.rhrRaw).filter((v) => v != null);
+      if (!vals.length) continue;
+      const avg = vals.reduce((s, x) => s + x, 0) / vals.length;
+      const startLabel = b.days[0].label;
+      const endLabel = b.days[b.days.length - 1].label;
+      const prev = out[out.length - 1];
+      const delta = prev ? ((avg - prev.avg) / prev.avg) * 100 : null;
+      out.push({ key: b.label, label: b.label, startLabel, endLabel, avg, delta });
+    }
+    return out;
+  }, [view, rhrView, rhrGran]);
   const rhrDomain = useMemo(() => {
     const v = rhrSeries.map((x) => x.rhr).filter((x) => x != null);
     if (!v.length) return [40, 70];
@@ -2061,9 +2083,48 @@ function App() {
           <//>
         <//>
 
-        <${Card} title=${"Resting Heart Rate · " + range} sub="7-day rolling avg · lower trend = more recovered / fitter"
-          source="Source: intervals.icu wellness (Garmin Connect partnership) — Garmin's daily lowest 30-min HR.">
-          <${ResponsiveContainer} width="100%" height=${220}>
+        <${Card} title=${"Resting Heart Rate · " + range}
+          sub=${rhrView === "Periods"
+            ? (rhrGran + " period averages · % change vs previous period (lower = better)")
+            : "7-day rolling avg · lower trend = more recovered / fitter"}
+          source="Source: intervals.icu wellness (Garmin Connect partnership) — Garmin's daily lowest 30-min HR."
+          right=${html`<div className="flex flex-col items-end gap-1.5">
+            <${Pills} options=${["Trend", "Periods"]} value=${rhrView} onChange=${setRhrView} />
+            ${rhrView === "Periods"
+              ? html`<${Pills} options=${["Daily", "Weekly", "Monthly"]} value=${rhrGran} onChange=${setRhrGran} />`
+              : null}
+          </div>`}>
+          ${rhrView === "Periods" ? html`<${ResponsiveContainer} width="100%" height=${260}>
+            <${ComposedChart} data=${rhrSeries} margin=${{ ...topMargin, top: 28 }}>
+              <${CartesianGrid} stroke=${C.grid} vertical=${false} />
+              <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
+              <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${rhrDomain} />
+              <${Tooltip} content=${h(TT, { fmt: (v) => Math.round(v) + " bpm" })} />
+              ${yearLines(view)}
+              ${raceLines(view, races)}
+              <${Line} type="monotone" dataKey="rhrRaw" name="Daily" stroke=${C.teal} strokeWidth=${1} dot=${false}
+                connectNulls=${true} strokeOpacity=${0.35} isAnimationActive=${false} />
+              <${Customized} component=${(props) => {
+                const xa = props.xAxisMap && Object.values(props.xAxisMap)[0];
+                const ya = props.yAxisMap && Object.values(props.yAxisMap)[0];
+                if (!xa || !ya || !rhrPeriods.length) return null;
+                const xs = xa.scale, ys = ya.scale;
+                return h("g", null, rhrPeriods.map((p, i) => {
+                  const x1 = xs(p.startLabel), x2 = xs(p.endLabel), y = ys(p.avg);
+                  if (x1 == null || x2 == null || y == null) return null;
+                  // RHR: lower is better → negative delta = green; positive = amber.
+                  const color = p.delta == null ? "#ffffff" : (p.delta < 0 ? "#10b981" : "#f59e0b");
+                  const mid = (x1 + x2) / 2;
+                  return h("g", { key: p.key },
+                    h("line", { x1, y1: y, x2, y2: y, stroke: color, strokeWidth: 3, strokeLinecap: "round" }),
+                    h("text", { x: mid, y: y - 10, fill: C.text, fontSize: 13, fontWeight: 700, textAnchor: "middle" }, Math.round(p.avg)),
+                    p.delta != null && h("text", { x: mid, y: y + 22, fill: color, fontSize: 11, fontWeight: 600, textAnchor: "middle" },
+                      (p.delta > 0 ? "+" : "") + p.delta.toFixed(0) + "%"),
+                  );
+                }));
+              }} />
+            <//>
+          <//>` : html`<${ResponsiveContainer} width="100%" height=${220}>
             <${LineChart} data=${rhrSeries} margin=${topMargin}>
               <${CartesianGrid} stroke=${C.grid} vertical=${false} />
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
@@ -2073,7 +2134,7 @@ function App() {
               ${raceLines(view, races)}
               <${Line} type="monotone" dataKey="rhr" name="Resting HR" stroke=${C.teal} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
-          <//>
+          <//>`}
         <//>
 
         <${Card} title=${"Weight · " + range} sub="7-day rolling avg smooths daily noise; weigh-ins fill from /weight Telegram command."
