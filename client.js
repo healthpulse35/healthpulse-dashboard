@@ -1752,7 +1752,11 @@ function App() {
   const metricMeta = { Load: { u: "", f: (v) => Math.round(v) }, Distance: { u: " km", f: (v) => v }, Time: { u: " h", f: (v) => v } };
   const mm = metricMeta[metric];
   const barColor = sport === "All" ? C.cyan : sportColor[sport];
-  const sleepColor = (v) => (v >= 7.5 ? C.green : C.greenSoft);
+  // Sleep chart uses a dedicated emerald pair so the met / not-met bars
+  // share the same hue family and read more refined than the platform
+  // status greens. Same values across themes — both shades sit fine on
+  // either background.
+  const sleepColor = (v) => (v >= 7.5 ? "#10b981" : "#6ee7b7");
   const totLabel = (g) => (g === "Daily" ? "Daily" : g + " totals");
   // Chart margins: pull both sides in tight. Left is negative to absorb
   // the Y-axis label gutter; right is 0 since there's no right axis to
