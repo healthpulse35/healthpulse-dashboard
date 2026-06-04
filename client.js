@@ -844,6 +844,504 @@ function BiomarkersView() {
   </div>`;
 }
 
+// ---------- recommendations ----------
+// Rules-based engine that turns the Optimized biomarker panel + recent
+// training context into a list of recommendation cards. Each rule has
+// triggers (marker names that must be flagged sev>=2 to fire) and a
+// build() that produces the card; the rule reads training context so
+// "deload now" advice only fires when load/TSB actually warrant it,
+// avoiding the classic "exercise more" suggestion to a 10h/wk athlete.
+
+const REC_SEV = {
+  "Very High":     { c: "#ef4444", label: "Very high" },
+  "High":          { c: "#f97316", label: "High" },
+  "Moderately High": { c: "#fbbf24", label: "Mod. high" },
+  "Optimal":       { c: "#34d399", label: "Optimal" },
+  "Moderately Low":{ c: "#fbbf24", label: "Mod. low" },
+  "Low":           { c: "#f97316", label: "Low" },
+  "Very Low":      { c: "#ef4444", label: "Very low" },
+};
+
+const TIER_META = {
+  "Top priority": { c: "#ef4444" },
+  "High":         { c: "#f97316" },
+  "Moderate":     { c: "#fbbf24" },
+  "Monitor":      { c: "#5eead4" },
+};
+
+// Lucide icons — used as accents on recommendation cards.
+const ICON = {
+  heart:   "M19.5 12.572 12 20l-7.5-7.428A5 5 0 1 1 12 6.006a5 5 0 1 1 7.5 6.572",
+  battery: "M22 14V10 M11 6H3a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8 M14 14v-4 M18 14v-4 M22 14a2 2 0 0 0-2-2h-9a2 2 0 0 0-2 2v0a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2",
+  pill:    "m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z M8.5 8.5l7 7",
+  droplet: "M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z",
+  shield:  "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z",
+  brain:   "M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z",
+};
+const IconSvg = ({ d, color, size = 18 }) => html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke=${color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">${d.split(" M").map((part, i) => html`<path key=${i} d=${(i === 0 ? "" : "M") + part} />`)}</svg>`;
+
+function buildTrainContext(days) {
+  if (!days || days.length === 0) return { weeklyHours: null, ctl: null, tsbAvg14: null };
+  const last28 = days.slice(-28);
+  const minutes = last28.reduce((s, d) => s
+    + (d.perSport.Run.dur || 0) + (d.perSport.Bike.dur || 0)
+    + (d.perSport.Swim.dur || 0) + (d.perSport.Strength.dur || 0), 0);
+  const weeklyHours = (minutes / 60) / 4;
+  const last = days[days.length - 1];
+  const tsb14 = days.slice(-14).map((d) => d.form).filter((v) => v != null);
+  const tsbAvg14 = tsb14.length ? tsb14.reduce((s, x) => s + x, 0) / tsb14.length : null;
+  return { weeklyHours, ctl: last ? last.fitness : null, tsbAvg14 };
+}
+
+function isHighLoad(ctx) {
+  return (ctx.weeklyHours != null && ctx.weeklyHours >= 8)
+      || (ctx.tsbAvg14 != null && ctx.tsbAvg14 <= -10);
+}
+
+const RECOMMENDATION_RULES = [
+  {
+    id: "lipids",
+    title: "Lower your atherogenic lipoproteins",
+    cats: ["Nutrition", "Medical"],
+    accent: "#ef4444",
+    icon: ICON.heart,
+    triggers: ["Apo B", "LDL Cholesterol", "Non-HDL Cholesterol", "Total Cholesterol"],
+    build(byName, ctx, triggered) {
+      const worstSev = Math.max(...triggered.map((n) => byName[n].sev));
+      const tier = worstSev >= 4 ? "Top priority" : worstSev >= 3 ? "High" : "Moderate";
+      const crp = byName["HS-CRP"], trigs = byName["Triglycerides"], hdl = byName["HDL Cholesterol"];
+      const cleanInflam = crp && crp.sev <= 1;
+      const cleanTrigs = trigs && trigs.sev <= 1;
+      const cleanHDL = hdl && hdl.sev <= 1;
+      let read = "Lipoproteins that drive plaque (LDL, ApoB, Non-HDL) are elevated.";
+      if (cleanInflam && cleanTrigs && cleanHDL) {
+        read += " HS-CRP, triglycerides and HDL are excellent — so this isolates the issue to lipoprotein quantity rather than inflammation or metabolic dysfunction. For a lean, high-volume endurance athlete this typically tracks with dietary saturated-fat intake or a hyper-responder phenotype; both are addressable.";
+      }
+      const actions = [
+        "Shift saturated → unsaturated fat: trade butter, coconut oil, fatty/processed meat and full-fat cheese for olive oil, avocado, oily fish and nuts.",
+        "Add 1–2 soluble-fibre sources daily — oats, legumes, chia or a psyllium scoop — which directly lowers LDL.",
+        "Book a GP follow-up for ApoB and Lp(a); ApoB is the number to track over time.",
+      ];
+      return {
+        id: this.id, tier, tierColor: TIER_META[tier].c, accent: this.accent, icon: this.icon,
+        title: this.title, cats: this.cats,
+        markers: triggered.map((n) => ({ name: n, b: byName[n] })),
+        read, actions, impact: "High", effort: "Medium", retest: "10–12 wks",
+      };
+    },
+  },
+  {
+    id: "recovery",
+    title: "Reduce training stress & restore hormones",
+    cats: ["Recovery", "Nutrition"],
+    accent: "#f97316",
+    icon: ICON.battery,
+    triggers: ["SHBG", "Cortisol - AM", "Free Testosterone", "Total Testosterone", "Lymphocytes"],
+    build(byName, ctx, triggered) {
+      const worstSev = Math.max(...triggered.map((n) => byName[n].sev));
+      const highLoad = isHighLoad(ctx);
+      const tier = worstSev >= 4 ? "Top priority" : highLoad ? "High" : "Moderate";
+      let read;
+      if (highLoad) {
+        const bits = [];
+        if (ctx.weeklyHours != null) bits.push("weekly volume ~" + ctx.weeklyHours.toFixed(1) + "h");
+        if (ctx.tsbAvg14 != null) bits.push("14-day form averaging " + ctx.tsbAvg14.toFixed(0));
+        if (ctx.ctl != null) bits.push("CTL ~" + ctx.ctl.toFixed(0));
+        read = "Cross-referencing your training log (" + bits.join(", ") + "): these endocrine markers look like accumulated training stress suppressing your HPG axis — a recovery signal, not a primary endocrine problem. The training data already supports a deload.";
+      } else {
+        read = "These endocrine markers suggest disrupted recovery, but your training load isn't elevated. Look first at sleep quality, total energy intake (especially around hard sessions), and life stress.";
+      }
+      const actions = [];
+      if (highLoad) actions.push("Take a 5–7 day deload now — drop volume by ~40%, keep intensity occasional and short.");
+      actions.push("Protect sleep: anchor a consistent wake time and aim for the top of your usual range during hard blocks.");
+      actions.push("Fuel enough — low energy availability is a major driver of high SHBG and suppressed free T. Match intake to your bigger days, especially around training.");
+      actions.push("Re-test SHBG, free T and AM cortisol after a recovery block, sampled on a rest-day morning.");
+      return {
+        id: this.id, tier, tierColor: TIER_META[tier].c, accent: this.accent, icon: this.icon,
+        title: this.title, cats: this.cats,
+        markers: triggered.map((n) => ({ name: n, b: byName[n] })),
+        read, actions, impact: "High", effort: "Low", retest: "6–8 wks",
+      };
+    },
+  },
+  {
+    id: "micro",
+    title: "Top up vitamins & audit your supplement stack",
+    cats: ["Supplements", "Nutrition"],
+    accent: "#fbbf24",
+    icon: ICON.pill,
+    triggers: ["Vitamin B12", "Vitamin D", "Folate (Serum)", "Magnesium", "Phosphorus"],
+    build(byName, ctx, triggered) {
+      const tier = "Moderate";
+      const high = triggered.filter((n) => byName[n].sev >= 2 && /High/i.test(byName[n].score));
+      const low = triggered.filter((n) => byName[n].sev >= 2 && /Low/i.test(byName[n].score));
+      let read = "";
+      if (low.length) read += "Low / borderline: " + low.join(", ") + ". ";
+      if (high.length) read += "High: " + high.join(", ") + " — mildly high serum levels almost always mean active supplementation, so the lever is auditing your stack rather than adding to it. ";
+      if (!read) read = "Some micronutrients drifted from the optimized targets — small adjustments below.";
+      const actions = [];
+      if (low.includes("Vitamin B12")) actions.push("B12: add more eggs, fish or dairy, or take a modest B-complex, then recheck.");
+      if (low.includes("Vitamin D")) actions.push("Vitamin D: 15–20 min of midday sun where practical + a low-dose D3 in the season you miss it, recheck after 8 weeks.");
+      if (low.includes("Folate (Serum)")) actions.push("Folate: leafy greens, legumes and citrus daily; recheck with the next panel.");
+      if (high.length) actions.push("Audit your supplement stack — temporarily drop anything supplying the flagged minerals to confirm they're the cause.");
+      actions.push("Re-test in 8–12 weeks.");
+      return {
+        id: this.id, tier, tierColor: TIER_META[tier].c, accent: this.accent, icon: this.icon,
+        title: this.title, cats: this.cats,
+        markers: triggered.map((n) => ({ name: n, b: byName[n] })),
+        read, actions, impact: "Medium", effort: "Low", retest: "8–12 wks",
+      };
+    },
+  },
+  {
+    id: "glucose",
+    title: "Fasting glucose — likely a false alarm",
+    cats: ["Monitor"],
+    accent: "#5eead4",
+    icon: ICON.droplet,
+    triggers: ["Fasting Blood Glucose (FBG)"],
+    fire(byName) {
+      const fbg = byName["Fasting Blood Glucose (FBG)"];
+      const hba1c = byName["HbA1c"];
+      // Only fire when fasting glucose is flagged BUT HbA1c is optimal —
+      // the classic athlete-discordance pattern.
+      return fbg && fbg.sev >= 2 && hba1c && hba1c.sev <= 1;
+    },
+    build(byName, ctx, triggered) {
+      const fbg = byName["Fasting Blood Glucose (FBG)"];
+      const hba1c = byName["HbA1c"];
+      const read = "Discordance check: fasting glucose flagged at " + fbg.value + " " + (fbg.units || "") + ", but HbA1c is " + hba1c.value + (hba1c.units || "") + " — the 3-month average wins. That pairing means your underlying glucose control is excellent and the single reading is most likely a stress / dawn-effect / morning-training artefact rather than a metabolic concern.";
+      const actions = [
+        "No action needed — 90-day glucose control is genuinely excellent.",
+        "Next draw: sample rested and not within ~24h of a hard or long session to avoid the morning-training spike.",
+      ];
+      return {
+        id: this.id, tier: "Monitor", tierColor: TIER_META["Monitor"].c, accent: this.accent, icon: this.icon,
+        title: this.title, cats: this.cats,
+        markers: [
+          { name: "Fasting Glucose", b: fbg },
+          { name: "HbA1c", b: hba1c },
+        ],
+        read, actions, impact: "Low", effort: "Low", retest: "next draw",
+      };
+    },
+  },
+  {
+    id: "iron",
+    title: "Iron support for endurance",
+    cats: ["Nutrition", "Medical"],
+    accent: "#f97316",
+    icon: ICON.shield,
+    triggers: ["Ferritin", "Iron", "% Transferrin Saturation", "Hemoglobin"],
+    build(byName, ctx, triggered) {
+      const tier = triggered.some((n) => byName[n].sev >= 3) ? "High" : "Moderate";
+      const read = "Low iron-status markers are a real endurance limiter — oxygen-delivery suffers before haemoglobin moves. Worth addressing before chasing extra training adaptation.";
+      const actions = [
+        "Add red meat, liver, oysters or sardines a few times per week; pair plant iron (legumes, dark greens) with vitamin C.",
+        "Avoid tea/coffee within an hour of iron-rich meals — they block absorption.",
+        "Discuss with a doctor before supplementing — over-supplementing iron has risks; a 3-month ferrous-sulphate course is common if confirmed.",
+        "Recheck ferritin, iron and saturation in 8–12 weeks.",
+      ];
+      return {
+        id: this.id, tier, tierColor: TIER_META[tier].c, accent: this.accent, icon: this.icon,
+        title: this.title, cats: this.cats,
+        markers: triggered.map((n) => ({ name: n, b: byName[n] })),
+        read, actions, impact: "Medium", effort: "Low", retest: "8–12 wks",
+      };
+    },
+  },
+  {
+    id: "inflammation",
+    title: "Investigate elevated inflammation",
+    cats: ["Medical", "Recovery"],
+    accent: "#ef4444",
+    icon: ICON.brain,
+    triggers: ["HS-CRP", "White Blood Cell (WBC)"],
+    fire(byName) {
+      const crp = byName["HS-CRP"];
+      return crp && crp.sev >= 3;
+    },
+    build(byName, ctx, triggered) {
+      const tier = "High";
+      const read = "HS-CRP this high is a real systemic-inflammation signal and worth a clinician's eye. Rule out recent infection, hard sessions in the last 48–72h, dental issues or chronic inflammation drivers before assuming a chronic problem.";
+      const actions = [
+        "Repeat HS-CRP in 3–4 weeks on a rested day, no hard training in the prior 48h.",
+        "Audit obvious drivers: sleep debt, gum/dental health, gut issues, alcohol intake.",
+        "If still elevated on repeat, book a GP review for further workup.",
+      ];
+      return {
+        id: this.id, tier, tierColor: TIER_META[tier].c, accent: this.accent, icon: this.icon,
+        title: this.title, cats: this.cats,
+        markers: triggered.map((n) => ({ name: n, b: byName[n] })),
+        read, actions, impact: "High", effort: "Low", retest: "3–4 wks",
+      };
+    },
+  },
+];
+
+function buildRecommendations(parsedList, ctx) {
+  const byName = {};
+  parsedList.forEach((p) => { byName[p.name] = p; });
+  const recs = [];
+  for (const rule of RECOMMENDATION_RULES) {
+    const triggered = rule.triggers.filter((n) => byName[n] && byName[n].sev >= 2);
+    const passes = rule.fire ? rule.fire(byName) : triggered.length > 0;
+    if (!passes || !triggered.length) continue;
+    recs.push(rule.build(byName, ctx, triggered));
+  }
+  const impactScore = { "High": 3, "Medium": 2, "Low": 1 };
+  recs.sort((a, b) => (impactScore[b.impact] - impactScore[a.impact])
+                   || (a.tier === "Top priority" ? -1 : b.tier === "Top priority" ? 1 : 0));
+  return { recs, byName };
+}
+
+// Nutrition swap suggestions, conditional on which rules fired.
+const EAT_SWAPS = {
+  lipids: {
+    more: [
+      { food: "Oats, barley & legumes", tag: "Soluble fibre → lowers LDL" },
+      { food: "Olive oil & avocado", tag: "Swap for sat fat → LDL / ApoB" },
+      { food: "Oily fish — salmon, sardines, mackerel", tag: "Omega-3 + B12 → ApoB, B12" },
+      { food: "Nuts — almonds, walnuts", tag: "Unsaturated fat → LDL" },
+    ],
+    less: [
+      { food: "Butter & coconut oil", tag: "Saturated fat → raises LDL / ApoB" },
+      { food: "Fatty & processed meat — bacon, sausage", tag: "Saturated fat → LDL / ApoB" },
+      { food: "Full-fat cheese", tag: "Saturated fat → LDL" },
+      { food: "Deep-fried foods", tag: "Sat / trans fat → LDL" },
+    ],
+  },
+  recovery: {
+    more: [{ food: "Carbs around training — rice, potato, fruit", tag: "Energy availability → SHBG / Free T" }],
+    less: [],
+  },
+  micro: {
+    more: [{ food: "Eggs & dairy", tag: "Raises B12" }],
+    less: [],
+  },
+  iron: {
+    more: [{ food: "Red meat, liver, oysters", tag: "Iron + B12 → ferritin" }],
+    less: [{ food: "Tea/coffee with iron-rich meals", tag: "Blocks iron absorption" }],
+  },
+};
+
+// "Working" markers worth calling out (key longevity / endurance markers that
+// land Optimal).
+const KEY_OPTIMAL_HIGHLIGHTS = [
+  { name: "HS-CRP", note: "very low systemic inflammation" },
+  { name: "HDL Cholesterol", note: "healthy 'good cholesterol'" },
+  { name: "Triglycerides", note: "excellent metabolic marker" },
+  { name: "HbA1c", note: "excellent 3-month glucose control" },
+  { name: "Ferritin", note: "iron stores dialled in" },
+  { name: "Hemoglobin", note: "oxygen-carrying capacity strong" },
+  { name: "Vitamin D", note: "in range" },
+  { name: "Apo B", note: "atherogenic particles in range" },
+];
+
+// Common supplements / interventions we want to actively dismiss when the
+// underlying marker is fine.
+const EVALUATED_INTERVENTIONS = [
+  { name: "Vitamin D", checkMarker: "Vitamin D",
+    okReason: "Already in your optimal range — supplementing a marker that's in range adds nothing and risks overshooting." },
+  { name: "Omega-3 / fish oil", checkMarker: "Triglycerides",
+    okReason: "Triglycerides and HS-CRP — its main targets — are already excellent. Get omega-3 from oily fish instead of capsules." },
+  { name: "Iron / ferritin", checkMarker: "Ferritin",
+    okReason: "The usual endurance watch-item, but yours is strong. No iron supplement needed." },
+  { name: "Magnesium", checkMarker: "Magnesium",
+    okReason: "Serum magnesium is fine. Supplement only if you have symptoms (cramps, poor sleep)." },
+];
+
+const REC_FILTERS = ["All", "Nutrition", "Recovery", "Medical", "Supplements", "Monitor"];
+
+function RecChip({ m }) {
+  const sevMeta = REC_SEV[m.b.score] || REC_SEV["Optimal"];
+  return html`<div className="flex items-center gap-2 rounded-lg px-2.5 py-1.5"
+    style=${{ background: C.bg, border: "1px solid " + C.border }}>
+    <span style=${{ width: 7, height: 7, borderRadius: 99, background: sevMeta.c, flexShrink: 0 }} />
+    <span className="text-xs" style=${{ color: C.text }}>${m.name}</span>
+    <span className="text-xs" style=${{ color: C.muted }}>${m.b.value != null ? m.b.value : "—"}${m.b.units ? " " + m.b.units : ""}</span>
+    <span className="text-xs font-medium" style=${{ color: sevMeta.c }}>${sevMeta.label}</span>
+  </div>`;
+}
+
+function RecCard({ r }) {
+  return html`<div className="rounded-2xl overflow-hidden mb-4"
+    style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + r.accent }}>
+    <div className="p-5">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="rounded-xl flex items-center justify-center" style=${{ width: 40, height: 40, background: r.accent + "1f", flexShrink: 0 }}>
+          <${IconSvg} d=${r.icon} color=${r.accent} size=${20} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="text-[11px] font-semibold rounded-md px-2 py-0.5"
+              style=${{ background: r.tierColor + "22", color: r.tierColor }}>${r.tier}</span>
+            ${r.cats.map((c) => html`<span key=${c} className="text-[11px]" style=${{ color: C.muted }}>${c}</span>`)}
+          </div>
+          <h3 className="text-base font-semibold" style=${{ color: C.text, letterSpacing: "-0.01em" }}>${r.title}</h3>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2 mb-4">${r.markers.map((m) => html`<${RecChip} key=${m.name} m=${m} />`)}</div>
+      <div className="rounded-xl p-3.5 mb-4" style=${{ background: C.bg, border: "1px solid " + C.border }}>
+        <div className="text-[10px] font-semibold tracking-wider mb-1.5" style=${{ color: r.accent }}>ANALYSIS</div>
+        <p className="text-sm leading-relaxed" style=${{ color: C.muted }}>${r.read}</p>
+      </div>
+      <div className="text-[10px] font-semibold tracking-wider mb-2.5" style=${{ color: C.muted }}>WHAT TO DO</div>
+      <div className="mb-4">
+        ${r.actions.map((a, i) => html`<div key=${i} className="flex items-start gap-2.5 mb-2.5">
+          <span style=${{ width: 5, height: 5, borderRadius: 99, background: r.accent, flexShrink: 0, marginTop: 7 }} />
+          <span className="text-sm leading-snug" style=${{ color: C.text }}>${a}</span>
+        </div>`)}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-3" style=${{ borderTop: "1px solid " + C.border }}>
+        <div><span className="text-xs" style=${{ color: C.muted }}>Impact</span> <span className="text-xs font-semibold" style=${{ color: r.accent }}>${r.impact}</span></div>
+        <div><span className="text-xs" style=${{ color: C.muted }}>Effort</span> <span className="text-xs font-semibold" style=${{ color: C.text }}>${r.effort}</span></div>
+        <div><span className="text-xs" style=${{ color: C.muted }}>Retest</span> <span className="text-xs font-semibold" style=${{ color: C.text }}>${r.retest}</span></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function RecommendationsView() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [filter, setFilter] = useState("All");
+  React.useEffect(() => {
+    if (data || err) return;
+    const params = new URLSearchParams(location.search);
+    const token = params.get("t") || params.get("token") || "";
+    fetch("https://ptisuvfdufngdfxfrzvn.supabase.co/functions/v1/dashboard?resource=biomarkers&token=" + encodeURIComponent(token))
+      .then(async (r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((d) => setData(d))
+      .catch((e) => setErr(String(e.message || e)));
+  }, [data, err]);
+
+  if (err) return html`<div style=${{ color: C.red }} className="text-sm">Failed to load biomarkers: ${err}</div>`;
+  if (!data) return html`<div style=${{ color: C.muted }} className="text-sm">Loading recommendations…</div>`;
+
+  // Optimized scoring drives the recs — longevity / athlete cutoffs.
+  const parsed = data.biomarkers.map((b) => parseBio(b, "Optimized"));
+  const ctx = buildTrainContext(DAYS);
+  const { recs, byName } = buildRecommendations(parsed, ctx);
+
+  const shown = filter === "All" ? recs : recs.filter((r) => r.cats.includes(filter));
+  const allOptimal = parsed.filter((p) => p.sev <= 1);
+  const flaggedCount = parsed.filter((p) => p.sev >= 2).length;
+
+  const firedIds = new Set(recs.map((r) => r.id));
+  const eatMore = [], eatLess = [];
+  for (const id of firedIds) {
+    if (EAT_SWAPS[id]) {
+      eatMore.push(...EAT_SWAPS[id].more);
+      eatLess.push(...EAT_SWAPS[id].less);
+    }
+  }
+  const dedupe = (arr) => { const seen = new Set(); return arr.filter((x) => seen.has(x.food) ? false : (seen.add(x.food), true)); };
+  const eatMoreU = dedupe(eatMore);
+  const eatLessU = dedupe(eatLess);
+
+  const working = KEY_OPTIMAL_HIGHLIGHTS
+    .map((h) => byName[h.name] && byName[h.name].sev <= 1
+      ? (byName[h.name].name + " (" + byName[h.name].value + (byName[h.name].units ? " " + byName[h.name].units : "") + ") — " + h.note)
+      : null)
+    .filter(Boolean);
+
+  const evaluated = EVALUATED_INTERVENTIONS
+    .filter((e) => byName[e.checkMarker] && byName[e.checkMarker].sev <= 1)
+    .map((e) => {
+      const m = byName[e.checkMarker];
+      return {
+        name: e.name,
+        val: m.value + (m.units ? " " + m.units : "") + " · " + m.score,
+        reason: e.okReason,
+      };
+    });
+
+  const topRec = recs[0];
+  const summary = [
+    { k: String(recs.length), v: "focus area" + (recs.length === 1 ? "" : "s") },
+    topRec ? { k: topRec.tier, v: topRec.title.split(" ").slice(0, 3).join(" ") + "…", c: topRec.accent } : null,
+    { k: String(flaggedCount), v: "markers flagged", c: flaggedCount ? C.amber : C.green },
+    ctx.weeklyHours != null ? { k: ctx.weeklyHours.toFixed(1) + "h", v: "training/wk (28d)" } : null,
+  ].filter(Boolean);
+
+  return html`<div>
+    <div className="mb-5">
+      <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Action Plan</div>
+      <h1 className="text-2xl font-bold mt-1">Recommendations</h1>
+      <p className="text-xs leading-relaxed mt-2" style=${{ color: C.muted, maxWidth: 600 }}>
+        Auto-generated from your latest blood panel (Optimized scoring) and your last 28 days of training. Markers are clustered by root cause and ranked by impact; the analysis reads your training context so advice like a deload only fires when the data actually warrants it.
+      </p>
+    </div>
+
+    <div className="flex flex-wrap gap-2 mb-5">
+      ${summary.map((s, i) => html`<div key=${i} className="rounded-xl px-4 py-2.5" style=${{ background: C.card, border: "1px solid " + C.border }}>
+        <span className="text-base font-bold" style=${{ color: s.c || C.text }}>${s.k}</span>
+        <span className="text-xs ml-2" style=${{ color: C.muted }}>${s.v}</span>
+      </div>`)}
+    </div>
+
+    <div className="rounded-xl px-4 py-3 mb-5 flex gap-3 items-start" style=${{ background: "rgba(239,83,80,0.07)", border: "1px solid rgba(239,83,80,0.25)" }}>
+      <span style=${{ color: C.red, marginTop: 1, fontSize: 14 }}>⚠</span>
+      <p className="text-xs leading-relaxed" style=${{ color: "#d99" }}>
+        <strong style=${{ color: C.red }}>Educational only — not medical advice.</strong> Evidence-informed suggestions auto-generated from your data. Discuss any changes — especially around lipids or medication — with a clinician.
+      </p>
+    </div>
+
+    <div className="flex flex-wrap gap-2 mb-5">
+      ${REC_FILTERS.map((f) => {
+        const on = filter === f;
+        return html`<button key=${f} onClick=${() => setFilter(f)}
+          className="text-xs rounded-full px-3.5 py-1.5 transition cursor-pointer"
+          style=${{ background: on ? C.cyan : C.card, color: on ? "#06212a" : C.muted, border: "1px solid " + (on ? C.cyan : C.border), fontWeight: on ? 600 : 400 }}>${f}</button>`;
+      })}
+    </div>
+
+    ${shown.length === 0 ? html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5 text-sm">
+      <span style=${{ color: C.green }}>● </span><span style=${{ color: C.muted }}>${filter === "All" ? "No flagged markers in the Optimized panel — nothing to act on right now. Keep doing what's working." : "Nothing in this category requires action."}</span>
+    </div>` : shown.map((r) => html`<${RecCard} key=${r.id} r=${r} />`)}
+
+    ${(filter === "All" || filter === "Nutrition") && (eatMoreU.length || eatLessU.length) ? html`<div className="rounded-2xl p-5 mt-6" style=${{ background: C.card, border: "1px solid " + C.border }}>
+      <div className="text-base font-semibold mb-1" style=${{ color: C.text }}>Eat more / eat less</div>
+      <p className="text-xs mb-4" style=${{ color: C.muted }}>Swaps targeting your flagged markers — this is about quality, not eating less overall. Keep fuelling for training.</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        ${[{ title: "Eat more", items: eatMoreU, c: "#34d399" }, { title: "Eat less", items: eatLessU, c: "#f97316" }].map((col) => col.items.length ? html`<div key=${col.title}>
+          <div className="text-sm font-semibold mb-3" style=${{ color: col.c }}>${col.title}</div>
+          ${col.items.map((it) => html`<div key=${it.food} className="flex items-start gap-2.5 rounded-lg px-3 py-2.5 mb-2" style=${{ background: C.bg, border: "1px solid " + C.border }}>
+            <span style=${{ width: 6, height: 6, borderRadius: 99, background: col.c, flexShrink: 0, marginTop: 6 }} />
+            <div>
+              <div className="text-sm" style=${{ color: C.text }}>${it.food}</div>
+              <div className="text-xs mt-0.5" style=${{ color: C.muted }}>${it.tag}</div>
+            </div>
+          </div>`)}
+        </div>` : null)}
+      </div>
+    </div>` : null}
+
+    ${filter === "All" && evaluated.length ? html`<div className="rounded-2xl p-5 mt-5" style=${{ background: C.card, border: "1px solid " + C.border }}>
+      <div className="text-base font-semibold mb-1" style=${{ color: C.text }}>Evaluated — no action needed</div>
+      <p className="text-xs mb-4" style=${{ color: C.muted }}>Common interventions ruled out against your current panel.</p>
+      ${evaluated.map((e) => html`<div key=${e.name} className="rounded-xl p-3.5 mb-3" style=${{ background: C.bg, border: "1px solid " + C.border }}>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <span className="text-sm font-medium" style=${{ color: C.text }}>${e.name}</span>
+          <span className="text-xs" style=${{ color: C.muted }}>${e.val}</span>
+        </div>
+        <p className="text-xs leading-relaxed" style=${{ color: C.muted }}>${e.reason}</p>
+      </div>`)}
+    </div>` : null}
+
+    ${filter === "All" && working.length ? html`<div className="rounded-2xl p-5 mt-5" style=${{ background: "rgba(52,211,153,0.06)", border: "1px solid rgba(52,211,153,0.25)" }}>
+      <div className="text-base font-semibold mb-3" style=${{ color: C.text }}>What's working — keep it up</div>
+      ${working.map((w) => html`<div key=${w} className="flex items-center gap-2.5 mb-2">
+        <span style=${{ color: C.green, fontWeight: 700 }}>✓</span>
+        <span className="text-sm" style=${{ color: C.muted }}>${w}</span>
+      </div>`)}
+    </div>` : null}
+
+    <p className="text-xs text-center mt-6" style=${{ color: C.muted }}>Re-run your panel after the suggested retest windows to track progress.</p>
+  </div>`;
+}
+
 // ---------- main ----------
 function App() {
   const [tab, setTab] = useState("Training");
@@ -1111,7 +1609,7 @@ function App() {
   // Tab bar — always rendered; the Training-only floating range selector
   // is conditioned on the active tab so it doesn't show on Biomarkers.
   const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4" style=${{ borderBottom: "1px solid " + C.border }}>
-    ${["Training", "Biomarkers"].map((t) => {
+    ${["Training", "Biomarkers", "Recommendations"].map((t) => {
       const on = t === tab;
       return html`<button key=${t} onClick=${() => setTab(t)}
         style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1 }}
@@ -1137,6 +1635,8 @@ function App() {
     ${TabBar}
 
     ${tab === "Biomarkers" ? html`<div className="max-w-7xl mx-auto"><${BiomarkersView} /></div>` : null}
+
+    ${tab === "Recommendations" ? html`<div className="max-w-7xl mx-auto"><${RecommendationsView} /></div>` : null}
 
     ${tab !== "Training" ? null : html`<div className="max-w-7xl mx-auto">
       <div className="flex items-end justify-between flex-wrap gap-3 mb-5">
