@@ -445,7 +445,12 @@ const BIO_SCORE_COLOR = {
 };
 const BIO_MON_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-function parseBio(b) {
+// `viewMode` is "Clinical" (badge follows the rendered bands — internal
+// consistency: the badge always matches where the tick visually sits) or
+// "Optimized" (badge uses the curated platform_score = narrower athlete /
+// longevity targets, falling back to the band-derived label when no
+// platform_score is set).
+function parseBio(b, viewMode) {
   const ranges = [];
   let vhHiEst = null;
   for (let i = 0; i < 7; i++) {
@@ -471,12 +476,15 @@ function parseBio(b) {
     }
     if (bandIdx === -1) bandIdx = value < ranges[0].lo ? 0 : 6;
   }
-  // Always derive the score label from the band the current value falls in
-  // — the DB-supplied platform_score sometimes disagrees with the bands we
-  // render, which produced "Low" badges sitting in the green band on screen.
-  const score = bandIdx >= 0
+  const clinicalScore = bandIdx >= 0
     ? ["Very Low","Low","Moderately Low","Optimal","Moderately High","High","Very High"][bandIdx]
-    : (b.platform_score || "N/A");
+    : "N/A";
+  // Clinical view = follow the rendered bands. Optimized view = use the
+  // curated platform_score when present (so longevity/athlete cutoffs can
+  // flag a marker that sits in the broader clinical-Optimal band).
+  const score = viewMode === "Optimized"
+    ? (b.platform_score || clinicalScore)
+    : clinicalScore;
   const sev = BIO_SCORE_SEV[score] ?? 0;
   const color = BIO_SCORE_COLOR[score] ?? C.muted;
   // Render-friendly history: each entry gets an x-index and a label.
@@ -685,6 +693,7 @@ function BiomarkersView() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [modal, setModal] = useState(null);
+  const [viewMode, setViewMode] = useState("Clinical");
   React.useEffect(() => {
     if (data || err) return;
     const params = new URLSearchParams(location.search);
@@ -701,7 +710,7 @@ function BiomarkersView() {
   if (err) return html`<div style=${{ color: C.red }} className="text-sm">Failed to load biomarkers: ${err}</div>`;
   if (!data) return html`<div style=${{ color: C.muted }} className="text-sm">Loading biomarkers…</div>`;
 
-  const parsed = data.biomarkers.map(parseBio);
+  const parsed = data.biomarkers.map((b) => parseBio(b, viewMode));
   const byName = {}; parsed.forEach((p) => { byName[p.name] = p; });
   const attention = parsed.filter((d) => d.sev >= 3).length;
 
@@ -754,16 +763,30 @@ function BiomarkersView() {
     </div>`;
   };
 
+  // Keep the open modal in sync with the active viewMode by re-resolving it
+  // against the freshly-parsed list (the user may flip the toggle while a
+  // detail modal is open).
+  const modalBio = modal ? (parsed.find((p) => p.name === modal.name) || modal) : null;
+  const viewBlurb = viewMode === "Clinical"
+    ? "Clinical: badges follow the rendered bands — broader reference intervals, only flags when you're outside them."
+    : "Optimized: badges apply narrower athlete / longevity targets when the panel has them, so borderline-in-range markers can still flag.";
+
   return html`<div>
-    <div className="mb-4">
-      <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Blood Panel</div>
-      <h1 className="text-2xl font-bold mt-1">Biomarkers</h1>
-      <div style=${{ color: C.muted }} className="text-xs mt-1">Latest results · ${latestStr} · <span style=${{ color: C.amber }}>${attention} markers</span> flagged High/Low · grouped by performance area</div>
+    <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
+      <div>
+        <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Blood Panel</div>
+        <h1 className="text-2xl font-bold mt-1">Biomarkers</h1>
+        <div style=${{ color: C.muted }} className="text-xs mt-1">Latest results · ${latestStr} · <span style=${{ color: C.amber }}>${attention} markers</span> flagged High/Low · grouped by performance area</div>
+      </div>
+      <div className="flex flex-col items-end gap-1.5">
+        <span style=${{ color: C.muted }} className="text-[10px] uppercase font-semibold">Scoring</span>
+        <${Pills} options=${["Clinical", "Optimized"]} value=${viewMode} onChange=${setViewMode} />
+      </div>
     </div>
 
     <div style=${{ background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10 }} className="p-3 mb-4 text-xs">
       <span style=${{ color: C.red }} className="font-semibold">Educational only — not medical advice. </span>
-      <span style=${{ color: C.muted }}>Category scores are derived from how many markers sit in range. The same marker can appear in several areas. Tap any marker to see its trend over time. Discuss anything flagged with a doctor.</span>
+      <span style=${{ color: C.muted }}>${viewBlurb} The coloured bands behind every chart are always the clinical reference ranges; only the badge and ring scoring change with the toggle.</span>
     </div>
 
     <div className="flex flex-wrap gap-3 mb-4 text-[11px]" style=${{ color: C.muted }}>
@@ -779,12 +802,12 @@ function BiomarkersView() {
     ${extraGroups.length ? html`<div style=${{ color: C.muted }} className="text-xs mb-3">Markers from your panel that aren't part of a performance category above, grouped by clinical type.</div>` : null}
     ${extraGroups.map((g, i) => renderGroup(g, "e" + i))}
 
-    ${modal ? html`<div onClick=${() => setModal(null)} style=${{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 50 }} className="flex items-start justify-center p-4 overflow-auto">
+    ${modalBio ? html`<div onClick=${() => setModal(null)} style=${{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 50 }} className="flex items-start justify-center p-4 overflow-auto">
       <div onClick=${(e) => e.stopPropagation()} style=${{ maxWidth: 680, width: "100%" }} className="mt-8">
         <div className="flex justify-end mb-2">
           <button onClick=${() => setModal(null)} style=${{ background: C.card, border: "1px solid " + C.border, color: C.text, borderRadius: 999 }} className="text-xs font-semibold px-3 py-1.5">✕ Close</button>
         </div>
-        <${MarkerDetail} b=${modal} />
+        <${MarkerDetail} b=${modalBio} />
       </div>
     </div>` : null}
   </div>`;
