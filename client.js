@@ -770,21 +770,21 @@ function BiomarkersView() {
     const sl = bioGroupScoreLabel(score);
     const need = g.items.filter((i) => i.sev >= 3).length;
     return html`<div key=${key} style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5">
-      <div className="flex flex-col sm:flex-row gap-5">
-        <div className="flex sm:flex-col items-center gap-3 sm:gap-1 shrink-0 sm:w-[110px]">
+      <div className="flex items-center gap-4 mb-4">
+        <div className="flex flex-col items-center shrink-0" style=${{ width: 100 }}>
           <${ScoreRing} score=${score} color=${sl.c} />
-          <div style=${{ color: sl.c }} className="text-sm font-semibold">${sl.w}</div>
+          <div style=${{ color: sl.c }} className="text-sm font-semibold mt-1">${sl.w}</div>
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-start justify-between gap-2">
             <div className="text-base font-bold" style=${{ color: C.text }}>${g.name}</div>
-            <div className="text-xs font-semibold" style=${{ color: need ? C.amber : C.green }}>${need ? need + " need attention" : "All in range"}</div>
+            <div className="text-xs font-semibold shrink-0" style=${{ color: need ? C.amber : C.green }}>${need ? need + " need attention" : "All in range"}</div>
           </div>
-          <div className="text-xs mt-1 mb-3" style=${{ color: C.muted }}>${g.desc}</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
-            ${g.items.map((b) => html`<${GroupMiniCard} key=${g.name + b.name} b=${b} onClick=${() => setModal(b)} />`)}
-          </div>
+          <div className="text-xs mt-1" style=${{ color: C.muted }}>${g.desc}</div>
         </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        ${g.items.map((b) => html`<${GroupMiniCard} key=${g.name + b.name} b=${b} onClick=${() => setModal(b)} />`)}
       </div>
     </div>`;
   };
