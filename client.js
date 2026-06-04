@@ -967,6 +967,20 @@ function App() {
     return [Math.floor(Math.min(...vals) - 6), Math.ceil(Math.max(...vals) + 6)];
   }, [hrvSeries, showRaw]);
 
+  // Tight y-domain for Fitness & Fatigue so small day-to-day moves are
+  // visible — round each end to the nearest 5 with a small pad, clamped
+  // at 0 (CTL/ATL can't go negative).
+  const ffDomain = useMemo(() => {
+    let lo = Infinity, hi = -Infinity;
+    for (const d of view) {
+      if (d.fitness != null) { if (d.fitness < lo) lo = d.fitness; if (d.fitness > hi) hi = d.fitness; }
+      if (d.fatigue != null) { if (d.fatigue < lo) lo = d.fatigue; if (d.fatigue > hi) hi = d.fatigue; }
+    }
+    if (lo === Infinity) return ["auto", "auto"];
+    const pad = Math.max(2, (hi - lo) * 0.08);
+    return [Math.max(0, Math.floor((lo - pad) / 5) * 5), Math.ceil((hi + pad) / 5) * 5];
+  }, [view]);
+
   const efSeries = AE_SESSIONS.map((s) => ({ label: fmtDate(s.date), session: s.ef, trend: s.trend, date: s.date }));
   const efDomain = (() => {
     const v = efSeries.flatMap((x) => [x.session, x.trend]).filter((x) => x != null);
@@ -1121,7 +1135,7 @@ function App() {
             </defs>
             <${CartesianGrid} stroke=${C.grid} vertical=${false} />
             <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
-            <${YAxis} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
+            <${YAxis} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} domain=${ffDomain} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
             ${FIT_OVERLAYS[fitOverlay] ? html`<${YAxis} yAxisId="right" orientation="right" tick=${{ ...axis, fill: FIT_OVERLAYS[fitOverlay].color }} tickLine=${false} axisLine=${false} width=${42} />` : null}
             <${Tooltip} content=${h(TT)} />
             ${yearLines(view, FIT_OVERLAYS[fitOverlay] ? "left" : undefined)}
