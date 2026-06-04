@@ -1178,15 +1178,13 @@ function App() {
             ${FIT_OVERLAYS[fitOverlay] ? html`<${Line} yAxisId="right" type="monotone" dataKey=${FIT_OVERLAYS[fitOverlay].key} name=${fitOverlay} stroke=${FIT_OVERLAYS[fitOverlay].color} strokeWidth=${1.6} strokeDasharray="4 3" dot=${false} connectNulls=${true} isAnimationActive=${false} />` : null}
           <//>
         <//>
-        <svg width="0" height="0" style=${{ position: "absolute" }} aria-hidden="true">
-          <defs>
-            <linearGradient id="gFormBand" x1="0" y1="0" x2="0" y2="1">
-              ${formGradStops.map((s, i) => html`<stop key=${i} offset=${s.offset + "%"} stopColor=${s.color} />`)}
-            </linearGradient>
-          </defs>
-        </svg>
         <${ResponsiveContainer} width="100%" height=${150}>
-          <${LineChart} data=${view} syncId="ff" margin=${{ top: 4, right: 12, left: -12, bottom: 0 }}>
+          <${ComposedChart} data=${view} syncId="ff" margin=${{ top: 4, right: 12, left: -12, bottom: 0 }}>
+            <defs>
+              <linearGradient id="gFormBand" x1="0" y1="0" x2="0" y2="1">
+                ${formGradStops.map((s, i) => html`<stop key=${i} offset=${s.offset + "%"} stopColor=${s.color} />`)}
+              </linearGradient>
+            </defs>
             <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.22} />
             <${ReferenceArea} y1=${5} y2=${20} fill=${C.cyan} fillOpacity=${0.22} />
             <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.22} />
