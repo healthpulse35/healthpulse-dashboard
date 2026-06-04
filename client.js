@@ -1749,10 +1749,16 @@ function App() {
     return out;
   }, [view, rhrView, rhrGran]);
   const rhrDomain = useMemo(() => {
-    const v = rhrSeries.map((x) => x.rhr).filter((x) => x != null);
-    if (!v.length) return [40, 70];
-    return [Math.floor(Math.min(...v) - 3), Math.ceil(Math.max(...v) + 3)];
-  }, [rhrSeries]);
+    const vals = rhrSeries.map((x) => x.rhr).filter((x) => x != null);
+    // In Periods view we ALSO plot the raw daily series, which has more
+    // variance than the 7-day rolling — extend the domain to include it
+    // so the period segments and the raw line both fit.
+    if (rhrView === "Periods") {
+      for (const x of rhrSeries) if (x.rhrRaw != null) vals.push(x.rhrRaw);
+    }
+    if (!vals.length) return [40, 70];
+    return [Math.floor(Math.min(...vals) - 3), Math.ceil(Math.max(...vals) + 3)];
+  }, [rhrSeries, rhrView]);
 
   // Weight: 7-day rolling avg + optional daily values. Mirrors the HRV
   // chart's "Overnight values" toggle pattern.
