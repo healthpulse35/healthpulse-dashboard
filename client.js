@@ -1205,9 +1205,9 @@ function App() {
             </defs>
             <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.22} />
             <${ReferenceArea} y1=${5} y2=${20} fill=${C.cyan} fillOpacity=${0.22} />
-            <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.22} />
+            <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.08} />
             <${ReferenceArea} y1=${-30} y2=${-10} fill=${C.green} fillOpacity=${0.28} />
-            <${ReferenceArea} y1=${-60} y2=${-30} fill=${C.red} fillOpacity=${0.28} />
+            <${ReferenceArea} y1=${-60} y2=${-30} fill=${C.red} fillOpacity=${0.12} />
             <${CartesianGrid} stroke=${C.grid} vertical=${false} />
             <${XAxis} dataKey="label" tick=${false} tickLine=${false} axisLine=${{ stroke: C.border }} height=${1} />
             <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${formDomain} allowDataOverflow=${true} />
