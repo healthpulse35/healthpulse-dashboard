@@ -623,8 +623,8 @@ function BioTrend({ b }) {
             tickFormatter=${fmtNum} tick=${{ fill: C.muted, fontSize: 10 }}
             tickLine=${false} axisLine=${false} width=${42} />
           <${Tooltip} content=${h(BioTT, { units: b.units, labelMap: b.labelByX })} />
-          <${Line} type="monotone" dataKey="value" stroke="#ffffff" strokeWidth=${2} isAnimationActive=${false} connectNulls=${true}
-            dot=${{ r: 4, fill: "#ffffff", stroke: C.bg, strokeWidth: 2 }} activeDot=${{ r: 5 }} />
+          <${Line} type="monotone" dataKey="value" stroke=${C.text} strokeWidth=${2} isAnimationActive=${false} connectNulls=${true}
+            dot=${{ r: 4, fill: C.text, stroke: C.bg, strokeWidth: 2 }} activeDot=${{ r: 5 }} />
         <//>
       <//>
     </div>
@@ -1520,7 +1520,7 @@ function App() {
   // `key` is the field name on each view row.
   const FIT_OVERLAYS = {
     "None":              null,
-    "Form (TSB)":        { key: "form",      color: "#e6eaf0", unit: "" },
+    "Form (TSB)":        { key: "form",      color: C.text,    unit: "" },
     "ACWR":              { key: "acwr",      color: "#a78bfa", unit: "" },
     "HRV (7d)":          { key: "hrv",       color: C.green,   unit: " ms" },
     "Resting HR (7d)":   { key: "rhr",       color: C.teal,    unit: " bpm" },
@@ -1884,7 +1884,7 @@ function App() {
             <${ReferenceLine} y=${0} stroke=${C.border} />
             ${raceLines(view, races)}
             <${Line} type="monotone" dataKey="form" name="Form"
-              stroke=${formGradStops.length ? "url(#gFormBand)" : "#e6eaf0"}
+              stroke=${formGradStops.length ? "url(#gFormBand)" : C.text}
               strokeWidth=${1.8} dot=${false} />
           <//>
         <//>
