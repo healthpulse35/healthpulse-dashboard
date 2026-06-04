@@ -1164,8 +1164,76 @@ function RecChip({ m }) {
   </div>`;
 }
 
+// Impact/effort coordinates per rule (0-100, where x=effort, y=impact).
+// Top-left of the grid = quick wins, top-right = big projects.
+const REC_IMPACT_XY = { "High": 85, "Medium": 55, "Low": 25 };
+const REC_EFFORT_XY = { "Low": 22, "Medium": 50, "High": 78 };
+
+// Push overlapping labels apart vertically and flip a label to the
+// left of its dot if it'd run off the right edge. Mirrors the template
+// implementation so the scatter stays readable when several recs cluster.
+function layoutRecLabels(pts, px, py, W, H, pad) {
+  const charW = 6.1, minV = 17, lead = 14;
+  const L = pts.map((p) => {
+    const cx = px(p.x), cy = py(p.y);
+    const w = p.label.length * charW;
+    const right = cx + lead + w + 6 <= W - 4;
+    const anchorX = right ? cx + lead : cx - lead;
+    return { ...p, cx, cy, right, anchorX,
+      x0: right ? anchorX : anchorX - w,
+      x1: right ? anchorX + w : anchorX,
+      ly: cy };
+  });
+  for (let pass = 0; pass < 80; pass++) {
+    L.sort((a, b) => a.ly - b.ly);
+    let moved = false;
+    for (let i = 0; i < L.length; i++) {
+      for (let j = i + 1; j < L.length; j++) {
+        const a = L[i], b = L[j];
+        if (a.x0 < b.x1 && b.x0 < a.x1 && b.ly - a.ly < minV) {
+          const push = (minV - (b.ly - a.ly)) / 2 + 0.5;
+          a.ly -= push; b.ly += push; moved = true;
+        }
+      }
+    }
+    for (const l of L) l.ly = Math.max(pad + 8, Math.min(H - pad - 6, l.ly));
+    if (!moved) break;
+  }
+  return L;
+}
+
+function ImpactEffortMap({ recs }) {
+  const W = 640, H = 360, pad = 50;
+  const px = (x) => pad + (x / 100) * (W - pad * 2);
+  const py = (y) => H - pad - (y / 100) * (H - pad * 2);
+  const pts = recs.map((r) => ({
+    label: r.title.length > 28 ? r.title.slice(0, 26) + "…" : r.title,
+    x: REC_EFFORT_XY[r.effort] ?? 50,
+    y: REC_IMPACT_XY[r.impact] ?? 50,
+    c: r.accent,
+  }));
+  const labels = layoutRecLabels(pts, px, py, W, H, pad);
+  return html`<svg viewBox=${"0 0 " + W + " " + H} className="w-full" style=${{ maxHeight: 380 }}>
+    <rect x=${pad} y=${pad} width=${(W - pad * 2) / 2} height=${(H - pad * 2) / 2} fill="#5eead4" opacity=${0.06} />
+    <text x=${px(13)} y=${py(96)} fill="#5eead4" fontSize="11.5" fontWeight="600" opacity=${0.8}>QUICK WINS</text>
+    <text x=${px(60)} y=${py(96)} fill=${C.muted} fontSize="11.5">BIG PROJECTS</text>
+    <line x1=${pad} y1=${H - pad} x2=${W - pad} y2=${H - pad} stroke=${C.border} strokeWidth=${1} />
+    <line x1=${pad} y1=${pad} x2=${pad} y2=${H - pad} stroke=${C.border} strokeWidth=${1} />
+    <line x1=${px(50)} y1=${pad} x2=${px(50)} y2=${H - pad} stroke=${C.border} strokeWidth=${1} strokeDasharray="3 4" />
+    <line x1=${pad} y1=${py(50)} x2=${W - pad} y2=${py(50)} stroke=${C.border} strokeWidth=${1} strokeDasharray="3 4" />
+    <text x=${pad} y=${H - pad + 24} fill=${C.muted} fontSize="11.5">Effort →</text>
+    <text x=${pad - 10} y=${pad - 16} fill=${C.muted} fontSize="11.5">Impact ↑</text>
+    ${labels.map((p, i) => html`<line key=${"ld" + i} x1=${p.cx} y1=${p.cy} x2=${p.anchorX} y2=${p.ly} stroke=${p.c} strokeWidth=${1} opacity=${0.35} />`)}
+    ${labels.map((p, i) => html`<g key=${i}>
+      <circle cx=${p.cx} cy=${p.cy} r=${7} fill=${p.c} />
+      <circle cx=${p.cx} cy=${p.cy} r=${11} fill="none" stroke=${p.c} opacity=${0.3} strokeWidth=${1.5} />
+      <text x=${p.anchorX + (p.right ? 5 : -5)} y=${p.ly} fill=${C.muted} fontSize="12" textAnchor=${p.right ? "start" : "end"} dominantBaseline="middle">${p.label}</text>
+    </g>`)}
+  </svg>`;
+}
+
 function RecCard({ r }) {
-  return html`<div className="rounded-2xl overflow-hidden mb-4"
+  return html`<div className="rounded-2xl overflow-hidden"
     style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + r.accent }}>
     <div className="p-5">
       <div className="flex items-start gap-3 mb-4">
@@ -1297,9 +1365,17 @@ function RecommendationsView() {
       })}
     </div>
 
+    ${recs.length >= 2 && filter === "All" ? html`<div className="rounded-2xl p-5 mb-5" style=${{ background: C.card, border: "1px solid " + C.border }}>
+      <div className="text-base font-semibold" style=${{ color: C.text }}>Where to start — impact vs effort</div>
+      <p className="text-xs mt-1 mb-3" style=${{ color: C.muted }}>Top-left = biggest return for the least work. Start there.</p>
+      <${ImpactEffortMap} recs=${recs} />
+    </div>` : null}
+
     ${shown.length === 0 ? html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5 text-sm">
       <span style=${{ color: C.green }}>● </span><span style=${{ color: C.muted }}>${filter === "All" ? "No flagged markers in the Optimized panel — nothing to act on right now. Keep doing what's working." : "Nothing in this category requires action."}</span>
-    </div>` : shown.map((r) => html`<${RecCard} key=${r.id} r=${r} />`)}
+    </div>` : html`<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      ${shown.map((r) => html`<${RecCard} key=${r.id} r=${r} />`)}
+    </div>`}
 
     ${(filter === "All" || filter === "Nutrition") && (eatMoreU.length || eatLessU.length) ? html`<div className="rounded-2xl p-5 mt-6" style=${{ background: C.card, border: "1px solid " + C.border }}>
       <div className="text-base font-semibold mb-1" style=${{ color: C.text }}>Eat more / eat less</div>
