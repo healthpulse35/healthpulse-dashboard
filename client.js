@@ -13,6 +13,7 @@ import {
   ComposedChart, LineChart, BarChart, Area, Line, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ReferenceArea, ReferenceLine, Cell,
+  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
 } from "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1";
 import htm from "https://esm.sh/htm@3.1.1";
 
@@ -660,6 +661,26 @@ function GroupMiniCard({ b, onClick }) {
   </button>`;
 }
 
+// Radar chart of the per-area scores. Lives in the top-left slot of the
+// biomarker grid so the user sees overall balance at a glance — values
+// shift live when the Clinical/Optimized toggle flips since they come
+// straight from bioGroupScore(items).
+function CategoryRadar({ data }) {
+  const tickStyle = { fill: C.muted, fontSize: 10 };
+  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5">
+    <div className="text-base font-bold" style=${{ color: C.text }}>Performance areas</div>
+    <div className="text-xs mt-1 mb-2" style=${{ color: C.muted }}>0–100 score per area. Higher = more markers sitting in range.</div>
+    <${ResponsiveContainer} width="100%" height=${320}>
+      <${RadarChart} data=${data} margin=${{ top: 8, right: 36, bottom: 8, left: 36 }}>
+        <${PolarGrid} stroke=${C.border} />
+        <${PolarAngleAxis} dataKey="category" tick=${tickStyle} />
+        <${PolarRadiusAxis} domain=${[0, 100]} angle=${90} tick=${{ ...tickStyle, fontSize: 9 }} stroke=${C.border} />
+        <${Radar} dataKey="score" stroke=${C.cyan} strokeWidth=${2} fill=${C.cyan} fillOpacity=${0.22} isAnimationActive=${false} />
+      <//>
+    <//>
+  </div>`;
+}
+
 function MarkerDetail({ b }) {
   if (!b) return null;
   return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + b.color, borderRadius: 14 }} className="p-5">
@@ -739,11 +760,16 @@ function BiomarkersView() {
   const allDates = parsed.flatMap((p) => p.series.map((s) => s.label));
   const latestStr = allDates.length ? allDates[allDates.length - 1] : "—";
 
+  const radarData = perfGroups.map((g) => ({
+    category: g.name,
+    score: bioGroupScore(g.items) ?? 0,
+  }));
+
   const renderGroup = (g, key) => {
     const score = bioGroupScore(g.items);
     const sl = bioGroupScoreLabel(score);
     const need = g.items.filter((i) => i.sev >= 3).length;
-    return html`<div key=${key} style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5 mb-4">
+    return html`<div key=${key} style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5">
       <div className="flex flex-col sm:flex-row gap-5">
         <div className="flex sm:flex-col items-center gap-3 sm:gap-1 shrink-0 sm:w-[110px]">
           <${ScoreRing} score=${score} color=${sl.c} />
@@ -755,7 +781,7 @@ function BiomarkersView() {
             <div className="text-xs font-semibold" style=${{ color: need ? C.amber : C.green }}>${need ? need + " need attention" : "All in range"}</div>
           </div>
           <div className="text-xs mt-1 mb-3" style=${{ color: C.muted }}>${g.desc}</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
             ${g.items.map((b) => html`<${GroupMiniCard} key=${g.name + b.name} b=${b} onClick=${() => setModal(b)} />`)}
           </div>
         </div>
@@ -796,11 +822,16 @@ function BiomarkersView() {
       <span><span style=${{ color: "#d1fae5" }}>■</span> Very high / very low</span>
     </div>
 
-    ${perfGroups.map((g, i) => renderGroup(g, "p" + i))}
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <${CategoryRadar} data=${radarData} />
+      ${perfGroups.map((g, i) => renderGroup(g, "p" + i))}
+    </div>
 
     ${extraGroups.length ? html`<div style=${{ color: C.text, borderBottom: "1px solid " + C.border }} className="text-sm font-semibold mt-6 mb-3 pb-2">Additional markers</div>` : null}
     ${extraGroups.length ? html`<div style=${{ color: C.muted }} className="text-xs mb-3">Markers from your panel that aren't part of a performance category above, grouped by clinical type.</div>` : null}
-    ${extraGroups.map((g, i) => renderGroup(g, "e" + i))}
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      ${extraGroups.map((g, i) => renderGroup(g, "e" + i))}
+    </div>
 
     ${modalBio ? html`<div onClick=${() => setModal(null)} style=${{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", zIndex: 50 }} className="flex items-start justify-center p-4 overflow-auto">
       <div onClick=${(e) => e.stopPropagation()} style=${{ maxWidth: 680, width: "100%" }} className="mt-8">
