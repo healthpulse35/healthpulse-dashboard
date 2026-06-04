@@ -1029,9 +1029,9 @@ function App() {
         <${Pills} options=${["1M", "3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
       </div>
 
-      <!-- Fitness & Fatigue + Form: full width, stacked, then the 2-col grid below -->
-      <${Card} title="Fitness & Fatigue" sub="Blue = fitness (CTL, 42-day EWMA). Purple = fatigue (ATL, 7-day EWMA). Form = blue − purple."
-        source="Source: intervals.icu wellness (Garmin Connect partnership). Days without a wellness row fall back to a local EWMA over Strava training-load."
+      <!-- Fitness/Fatigue + Form: one card, stacked charts, synced hover cursor -->
+      <${Card} title="Fitness, Fatigue & Form" sub="Blue = fitness (CTL, 42-day EWMA). Purple = fatigue (ATL, 7-day EWMA). White (lower) = form (CTL − ATL)."
+        source="Source: intervals.icu wellness (Garmin Connect partnership). Form is derived (CTL − ATL). Days without a wellness row fall back to a local EWMA over Strava training-load."
         right=${html`<div className="flex items-center gap-2">
           <span style=${{ color: C.muted }} className="text-[11px]">Overlay</span>
           <select value=${fitOverlay} onChange=${(e) => setFitOverlay(e.target.value)}
@@ -1041,7 +1041,7 @@ function App() {
           </select>
         </div>`}>
         <${ResponsiveContainer} width="100%" height=${300}>
-          <${ComposedChart} data=${view} margin=${{ top: 16, right: 12, left: -12, bottom: 0 }}>
+          <${ComposedChart} data=${view} syncId="ff" margin=${{ top: 16, right: 12, left: -12, bottom: 0 }}>
             <defs>
               <linearGradient id="gFit" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor=${C.cyan} stopOpacity=${0.32} />
@@ -1060,31 +1060,27 @@ function App() {
             ${FIT_OVERLAYS[fitOverlay] ? html`<${Line} yAxisId="right" type="monotone" dataKey=${FIT_OVERLAYS[fitOverlay].key} name=${fitOverlay} stroke=${FIT_OVERLAYS[fitOverlay].color} strokeWidth=${1.6} strokeDasharray="4 3" dot=${false} connectNulls=${true} isAnimationActive=${false} />` : null}
           <//>
         <//>
-        <div className="text-[11px] mt-3" style=${{ color: C.muted, lineHeight: 1.5 }}>
-          Keep purple above blue to drive fitness up. Form (blue − purple) optimal when slightly positive; very negative = high injury risk; very positive = ready to race. Schedule rest weeks to clear fatigue before key events.
-        </div>
-      <//>
-
-      <${Card} title="Form (TSB)" sub="Fitness − Fatigue. Negative = loaded; very negative = high injury risk."
-        source="Source: derived (CTL − ATL). Underlying values come from intervals.icu wellness (Garmin partnership), with Strava-based EWMA fallback on gap days.">
-        <${ResponsiveContainer} width="100%" height=${300}>
-          <${LineChart} data=${view} margin=${topMargin}>
+        <${ResponsiveContainer} width="100%" height=${150}>
+          <${LineChart} data=${view} syncId="ff" margin=${{ top: 4, right: 12, left: -12, bottom: 0 }}>
             <${ReferenceArea} y1=${20} y2=${60} fill=${C.amber} fillOpacity=${0.22} />
             <${ReferenceArea} y1=${5} y2=${20} fill=${C.cyan} fillOpacity=${0.22} />
             <${ReferenceArea} y1=${-10} y2=${5} fill=${C.muted} fillOpacity=${0.22} />
             <${ReferenceArea} y1=${-30} y2=${-10} fill=${C.green} fillOpacity=${0.28} />
             <${ReferenceArea} y1=${-60} y2=${-30} fill=${C.red} fillOpacity=${0.28} />
             <${CartesianGrid} stroke=${C.grid} vertical=${false} />
-            <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
+            <${XAxis} dataKey="label" tick=${false} tickLine=${false} axisLine=${{ stroke: C.border }} height=${1} />
             <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[-45, 35]} />
             <${Tooltip} content=${h(TT)} />
             <${ReferenceLine} y=${0} stroke=${C.border} />
-            ${yearLines(view)}
             ${raceLines(view, races)}
             <${Line} type="monotone" dataKey="form" name="Form" stroke="#e6eaf0" strokeWidth=${1.8} dot=${false} />
           <//>
         <//>
-        <div className="flex flex-wrap gap-3 mt-3 text-[11px]" style=${{ color: C.muted }}>
+        <div className="text-[11px] mt-3" style=${{ color: C.muted, lineHeight: 1.5 }}>
+          Keep purple above blue to drive fitness up. Form (blue − purple) optimal when slightly positive; very negative = high injury risk; very positive = ready to race. Schedule rest weeks to clear fatigue before key events.
+        </div>
+        <div className="flex flex-wrap gap-3 mt-2 text-[11px]" style=${{ color: C.muted }}>
+          <span style=${{ color: C.muted, marginRight: 4 }}>Form bands:</span>
           <span><span style=${{ color: C.amber }}>■</span> Transition</span>
           <span><span style=${{ color: C.cyan }}>■</span> Fresh</span>
           <span><span style=${{ color: C.muted }}>■</span> Grey zone</span>
