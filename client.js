@@ -28,13 +28,15 @@ const h = React.createElement;
 const THEMES = {
   dark: {
     bg: "#0a0d12", card: "#12161e", border: "#222a36", muted: "#7c8696",
-    text: "#e6eaf0", cyan: "#2dd4ee", green: "#34d399", red: "#f87171",
-    amber: "#fbbf24", violet: "#a78bfa", teal: "#5eead4", grid: "#1b212b",
+    text: "#e6eaf0", cyan: "#2dd4ee", green: "#34d399", greenSoft: "#a7f3d0",
+    red: "#f87171", amber: "#fbbf24", violet: "#a78bfa", teal: "#5eead4",
+    grid: "#1b212b",
   },
   light: {
     bg: "#f5f7fa", card: "#ffffff", border: "#dde3ec", muted: "#5e6b7c",
-    text: "#0f1722", cyan: "#0891b2", green: "#16a34a", red: "#dc2626",
-    amber: "#d97706", violet: "#7c3aed", teal: "#0d9488", grid: "#eef1f5",
+    text: "#0f1722", cyan: "#0891b2", green: "#16a34a", greenSoft: "#86efac",
+    red: "#dc2626", amber: "#d97706", violet: "#7c3aed", teal: "#0d9488",
+    grid: "#eef1f5",
   },
 };
 const THEME_KEY = "hp_theme_v1";
@@ -1750,7 +1752,7 @@ function App() {
   const metricMeta = { Load: { u: "", f: (v) => Math.round(v) }, Distance: { u: " km", f: (v) => v }, Time: { u: " h", f: (v) => v } };
   const mm = metricMeta[metric];
   const barColor = sport === "All" ? C.cyan : sportColor[sport];
-  const sleepColor = (v) => (v >= 7.5 ? C.green : v >= 6.5 ? C.amber : C.red);
+  const sleepColor = (v) => (v >= 7.5 ? C.green : C.greenSoft);
   const totLabel = (g) => (g === "Daily" ? "Daily" : g + " totals");
   // Chart margins: pull both sides in tight. Left is negative to absorb
   // the Y-axis label gutter; right is 0 since there's no right axis to
