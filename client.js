@@ -535,14 +535,17 @@ function BioTrend({ b }) {
   const optHi = b.ranges[3].hi;
   const optLo = b.ranges[3].lo;
 
+  // Axis bar uses traffic-light colours regardless of the (softer)
+  // band palette used by the MiniRange dashboard tiles.
+  const AXIS_COLORS = ["#ef4444", "#f97316", "#eab308", "#34d399", "#eab308", "#f97316", "#ef4444"];
   // CSS gradient stops: screen-top = domHi, screen-bottom = domLo. Each band
   // gets a solid run from its top edge to its bottom edge.
   const stops = [];
   let cursor = 0;
   for (let i = 6; i >= 0; i--) {
     const next = i === 0 ? 100 : pctFromTop(b.ranges[i].lo);
-    stops.push(b.ranges[i].color + " " + cursor.toFixed(2) + "%");
-    stops.push(b.ranges[i].color + " " + next.toFixed(2) + "%");
+    stops.push(AXIS_COLORS[i] + " " + cursor.toFixed(2) + "%");
+    stops.push(AXIS_COLORS[i] + " " + next.toFixed(2) + "%");
     cursor = next;
   }
   const grad = "linear-gradient(to bottom, " + stops.join(", ") + ")";
