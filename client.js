@@ -1135,12 +1135,12 @@ function App() {
             </defs>
             <${CartesianGrid} stroke=${C.grid} vertical=${false} />
             <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
-            <${YAxis} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} domain=${ffDomain} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
+            <${YAxis} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} domain=${ffDomain} allowDataOverflow=${true} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
             ${FIT_OVERLAYS[fitOverlay] ? html`<${YAxis} yAxisId="right" orientation="right" tick=${{ ...axis, fill: FIT_OVERLAYS[fitOverlay].color }} tickLine=${false} axisLine=${false} width=${42} />` : null}
             <${Tooltip} content=${h(TT)} />
             ${yearLines(view, FIT_OVERLAYS[fitOverlay] ? "left" : undefined)}
             ${raceLines(view, races, FIT_OVERLAYS[fitOverlay] ? "left" : undefined)}
-            <${Area} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" dot=${false} />
+            <${Area} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" baseValue=${typeof ffDomain[0] === "number" ? ffDomain[0] : "dataMin"} dot=${false} />
             <${Line} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
             ${FIT_OVERLAYS[fitOverlay] ? html`<${Line} yAxisId="right" type="monotone" dataKey=${FIT_OVERLAYS[fitOverlay].key} name=${fitOverlay} stroke=${FIT_OVERLAYS[fitOverlay].color} strokeWidth=${1.6} strokeDasharray="4 3" dot=${false} connectNulls=${true} isAnimationActive=${false} />` : null}
           <//>
