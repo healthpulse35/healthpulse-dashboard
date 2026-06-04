@@ -967,6 +967,24 @@ function App() {
     return [Math.floor(Math.min(...vals) - 6), Math.ceil(Math.max(...vals) + 6)];
   }, [hrvSeries, showRaw]);
 
+  // Y-domain for the Form chart: tight to the data on top, but always
+  // shows at least down to −30 so the top of the High-Risk band is
+  // visible; extends lower when data goes below.
+  const formDomain = useMemo(() => {
+    let lo = Infinity, hi = -Infinity;
+    for (const d of view) {
+      if (d.form != null) {
+        if (d.form < lo) lo = d.form;
+        if (d.form > hi) hi = d.form;
+      }
+    }
+    if (lo === Infinity) return [-30, 20];
+    const pad = 3;
+    const minY = Math.min(lo - pad, -30);
+    const maxY = hi + pad;
+    return [Math.floor(minY / 5) * 5, Math.ceil(maxY / 5) * 5];
+  }, [view]);
+
   // Vertical gradient stops for the Form line so each segment is coloured
   // by the band it passes through. SVG gradient `objectBoundingBox` maps
   // offset 0→top of bbox (= line's max form value) and 100→bottom (min),
@@ -1192,7 +1210,7 @@ function App() {
             <${ReferenceArea} y1=${-60} y2=${-30} fill=${C.red} fillOpacity=${0.28} />
             <${CartesianGrid} stroke=${C.grid} vertical=${false} />
             <${XAxis} dataKey="label" tick=${false} tickLine=${false} axisLine=${{ stroke: C.border }} height=${1} />
-            <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${[-45, 35]} />
+            <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${formDomain} allowDataOverflow=${true} />
             <${Tooltip} content=${h(TT)} />
             <${ReferenceLine} y=${0} stroke=${C.border} />
             ${raceLines(view, races)}
