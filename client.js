@@ -1517,6 +1517,7 @@ function App() {
   const [showRaw, setShowRaw] = useState(false);
   const [showRawWeight, setShowRawWeight] = useState(false);
   const [rhrView, setRhrView] = useState("Periods"); // "Trend" | "Periods"
+  const [hrvView, setHrvView] = useState("Trend");   // "Trend" | "Periods"
   const [loadView, setLoadView] = useState("Acute load"); // "Acute load" | "Ratio"
   const [fitOverlay, setFitOverlay] = useState("None");
 
@@ -1622,12 +1623,12 @@ function App() {
     const vals = [];
     for (const s of hrvSeries) {
       if (s.hrv != null) vals.push(s.hrv);
-      if (showRaw && s.raw != null) vals.push(s.raw);
-      if (s.band) { vals.push(s.band[0]); vals.push(s.band[1]); }
+      if ((showRaw || hrvView === "Periods") && s.raw != null) vals.push(s.raw);
+      if (s.band && hrvView !== "Periods") { vals.push(s.band[0]); vals.push(s.band[1]); }
     }
     if (!vals.length) return [0, 100];
     return [Math.floor(Math.min(...vals) - 6), Math.ceil(Math.max(...vals) + 6)];
-  }, [hrvSeries, showRaw]);
+  }, [hrvSeries, showRaw, hrvView]);
 
   // Y-domain for the Form chart: tight to the data on top, but always
   // shows at least down to −30 so the top of the High-Risk band is
@@ -1731,6 +1732,25 @@ function App() {
   // Period-averages view: bucket the visible window, compute the mean of
   // the raw daily RHR per period, then express each period's change vs
   // the previous (lower = better for RHR, so a negative delta is green).
+  // HRV monthly averages — same shape as RHR but higher is better, so
+  // positive delta = green (improvement), negative = amber (decline).
+  const hrvPeriods = useMemo(() => {
+    if (hrvView !== "Periods") return [];
+    const buckets = bucketize(view, "Monthly");
+    const out = [];
+    for (const b of buckets) {
+      const vals = b.days.map((d) => d.hrvRaw).filter((v) => v != null);
+      if (!vals.length) continue;
+      const avg = vals.reduce((s, x) => s + x, 0) / vals.length;
+      const startLabel = b.days[0].label;
+      const endLabel = b.days[b.days.length - 1].label;
+      const prev = out[out.length - 1];
+      const delta = prev ? ((avg - prev.avg) / prev.avg) * 100 : null;
+      out.push({ key: b.label, label: b.label, startLabel, endLabel, avg, delta });
+    }
+    return out;
+  }, [view, hrvView]);
+
   const rhrPeriods = useMemo(() => {
     if (rhrView !== "Periods") return [];
     const buckets = bucketize(view, "Monthly");
@@ -2068,12 +2088,48 @@ function App() {
           <//>
         <//>
 
-        <${Card} title=${"HRV Trend · " + range} sub="7-day rolling avg · shaded band = your trailing 60-day mean ± 0.7σ (personal baseline)"
+        <${Card} title=${"HRV Trend · " + range}
+          sub=${hrvView === "Periods"
+            ? "Monthly averages · % change vs previous month (higher = better)"
+            : "7-day rolling avg · shaded band = your trailing 60-day mean ± 0.7σ (personal baseline)"}
           source="Source: intervals.icu wellness (Garmin Connect partnership). Garmin reports nightly RMSSD HRV; we deliberately don't mix Apple Health HRV (which is SDNN) to avoid corrupting the trend."
-          right=${html`<button onClick=${() => setShowRaw((s) => !s)}
-            style=${{ background: showRaw ? C.muted : "transparent", color: showRaw ? "#0a0d12" : C.muted, border: "1px solid " + (showRaw ? C.muted : C.border), borderRadius: 999 }}
-            className="px-3 py-1 text-xs font-semibold">Overnight values</button>`}>
-          <${ResponsiveContainer} width="100%" height=${220}>
+          right=${html`<div className="flex items-center gap-2">
+            ${hrvView === "Trend" ? html`<button onClick=${() => setShowRaw((s) => !s)}
+              style=${{ background: showRaw ? C.muted : "transparent", color: showRaw ? "#0a0d12" : C.muted, border: "1px solid " + (showRaw ? C.muted : C.border), borderRadius: 999 }}
+              className="px-3 py-1 text-xs font-semibold">Overnight values</button>` : null}
+            <${Pills} options=${["Trend", "Periods"]} value=${hrvView} onChange=${setHrvView} />
+          </div>`}>
+          ${hrvView === "Periods" ? html`<${ResponsiveContainer} width="100%" height=${260}>
+            <${ComposedChart} data=${hrvSeries} margin=${{ ...topMargin, top: 28 }}>
+              <${CartesianGrid} stroke=${C.grid} vertical=${false} />
+              <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
+              <${YAxis} tick=${axis} tickLine=${false} axisLine=${false} width=${38} domain=${hrvDomain} />
+              <${Tooltip} content=${h(TT, { fmt: (v) => Math.round(v) + " ms" })} />
+              ${yearLines(view)}
+              ${raceLines(view, races)}
+              <${Line} type="monotone" dataKey="raw" name="Overnight" stroke=${C.green} strokeWidth=${1} dot=${false}
+                connectNulls=${true} strokeOpacity=${0.35} isAnimationActive=${false} />
+              <${Customized} component=${(props) => {
+                const xa = props.xAxisMap && Object.values(props.xAxisMap)[0];
+                const ya = props.yAxisMap && Object.values(props.yAxisMap)[0];
+                if (!xa || !ya || !hrvPeriods.length) return null;
+                const xs = xa.scale, ys = ya.scale;
+                return h("g", null, hrvPeriods.map((p, i) => {
+                  const x1 = xs(p.startLabel), x2 = xs(p.endLabel), y = ys(p.avg);
+                  if (x1 == null || x2 == null || y == null) return null;
+                  // HRV: higher is better → positive delta = green; negative = amber.
+                  const color = p.delta == null ? "#ffffff" : (p.delta > 0 ? "#10b981" : "#f59e0b");
+                  const mid = (x1 + x2) / 2;
+                  return h("g", { key: p.key },
+                    h("line", { x1, y1: y, x2, y2: y, stroke: color, strokeWidth: 3, strokeLinecap: "round" }),
+                    h("text", { x: mid, y: y - 10, fill: C.text, fontSize: 13, fontWeight: 700, textAnchor: "middle" }, Math.round(p.avg)),
+                    p.delta != null && h("text", { x: mid, y: y + 22, fill: color, fontSize: 11, fontWeight: 600, textAnchor: "middle" },
+                      (p.delta > 0 ? "+" : "") + p.delta.toFixed(0) + "%"),
+                  );
+                }));
+              }} />
+            <//>
+          <//>` : html`<${ResponsiveContainer} width="100%" height=${220}>
             <${ComposedChart} data=${hrvSeries} margin=${topMargin}>
               <${CartesianGrid} stroke=${C.grid} vertical=${false} />
               <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${40} />
@@ -2085,7 +2141,7 @@ function App() {
               ${showRaw ? html`<${Line} type="monotone" dataKey="raw" name="Overnight" stroke="#9aa6b6" strokeWidth=${1} strokeDasharray="2 3" strokeOpacity=${0.7} dot=${false} isAnimationActive=${false} connectNulls=${true} />` : null}
               <${Line} type="monotone" dataKey="hrv" name="7-day avg" stroke=${C.green} strokeWidth=${2} dot=${false} connectNulls=${true} />
             <//>
-          <//>
+          <//>`}
         <//>
 
         <${Card} title=${"Resting Heart Rate · " + range}
