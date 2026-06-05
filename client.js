@@ -1516,8 +1516,7 @@ function App() {
   const [metric, setMetric] = useState("Load");
   const [showRaw, setShowRaw] = useState(false);
   const [showRawWeight, setShowRawWeight] = useState(false);
-  const [rhrView, setRhrView] = useState("Trend"); // "Trend" | "Periods"
-  const [rhrGran, setRhrGran] = useState("Monthly");
+  const [rhrView, setRhrView] = useState("Periods"); // "Trend" | "Periods"
   const [loadView, setLoadView] = useState("Acute load"); // "Acute load" | "Ratio"
   const [fitOverlay, setFitOverlay] = useState("None");
 
@@ -1734,7 +1733,7 @@ function App() {
   // the previous (lower = better for RHR, so a negative delta is green).
   const rhrPeriods = useMemo(() => {
     if (rhrView !== "Periods") return [];
-    const buckets = bucketize(view, rhrGran);
+    const buckets = bucketize(view, "Monthly");
     const out = [];
     for (const b of buckets) {
       const vals = b.days.map((d) => d.rhrRaw).filter((v) => v != null);
@@ -1747,7 +1746,7 @@ function App() {
       out.push({ key: b.label, label: b.label, startLabel, endLabel, avg, delta });
     }
     return out;
-  }, [view, rhrView, rhrGran]);
+  }, [view, rhrView]);
   const rhrDomain = useMemo(() => {
     const vals = rhrSeries.map((x) => x.rhr).filter((x) => x != null);
     // In Periods view we ALSO plot the raw daily series, which has more
@@ -2091,15 +2090,10 @@ function App() {
 
         <${Card} title=${"Resting Heart Rate · " + range}
           sub=${rhrView === "Periods"
-            ? (rhrGran + " period averages · % change vs previous period (lower = better)")
+            ? "Monthly averages · % change vs previous month (lower = better)"
             : "7-day rolling avg · lower trend = more recovered / fitter"}
           source="Source: intervals.icu wellness (Garmin Connect partnership) — Garmin's daily lowest 30-min HR."
-          right=${html`<div className="flex flex-col items-end gap-1.5">
-            <${Pills} options=${["Trend", "Periods"]} value=${rhrView} onChange=${setRhrView} />
-            ${rhrView === "Periods"
-              ? html`<${Pills} options=${["Daily", "Weekly", "Monthly"]} value=${rhrGran} onChange=${setRhrGran} />`
-              : null}
-          </div>`}>
+          right=${html`<${Pills} options=${["Periods", "Trend"]} value=${rhrView} onChange=${setRhrView} />`}>
           ${rhrView === "Periods" ? html`<${ResponsiveContainer} width="100%" height=${260}>
             <${ComposedChart} data=${rhrSeries} margin=${{ ...topMargin, top: 28 }}>
               <${CartesianGrid} stroke=${C.grid} vertical=${false} />
