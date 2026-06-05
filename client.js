@@ -2118,7 +2118,11 @@ function App() {
                   const x1 = xs(p.startLabel), x2 = xs(p.endLabel), y = ys(p.avg);
                   if (x1 == null || x2 == null || y == null) return null;
                   // HRV: higher is better → positive delta = green; negative = amber.
-                  const color = p.delta == null ? C.text : (p.delta > 0 ? "#10b981" : "#f59e0b");
+                  // Baseline period has no delta — inherit the next period's
+                  // colour so it reads as part of the trend rather than neutral.
+                  const next = hrvPeriods[i + 1];
+                  const nextColor = next && next.delta != null ? (next.delta > 0 ? "#10b981" : "#f59e0b") : "#10b981";
+                  const color = p.delta == null ? nextColor : (p.delta > 0 ? "#10b981" : "#f59e0b");
                   const mid = (x1 + x2) / 2;
                   return h("g", { key: p.key },
                     h("line", { x1, y1: y, x2, y2: y, stroke: color, strokeWidth: 3, strokeLinecap: "round" }),
@@ -2169,7 +2173,11 @@ function App() {
                   const x1 = xs(p.startLabel), x2 = xs(p.endLabel), y = ys(p.avg);
                   if (x1 == null || x2 == null || y == null) return null;
                   // RHR: lower is better → negative delta = green; positive = amber.
-                  const color = p.delta == null ? C.text : (p.delta < 0 ? "#10b981" : "#f59e0b");
+                  // Baseline period has no delta — inherit the next period's
+                  // colour so it reads as part of the trend rather than neutral.
+                  const next = rhrPeriods[i + 1];
+                  const nextColor = next && next.delta != null ? (next.delta < 0 ? "#10b981" : "#f59e0b") : "#10b981";
+                  const color = p.delta == null ? nextColor : (p.delta < 0 ? "#10b981" : "#f59e0b");
                   const mid = (x1 + x2) / 2;
                   return h("g", { key: p.key },
                     h("line", { x1, y1: y, x2, y2: y, stroke: color, strokeWidth: 3, strokeLinecap: "round" }),
