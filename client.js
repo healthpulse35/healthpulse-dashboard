@@ -147,12 +147,28 @@ AE_SESSIONS.forEach((s, i) => {
 });
 
 // ---------- bucketize ----------
+// Weekly bucketing aligns to ISO Mondays so every weekly view (Volume,
+// Zones, Sleep, etc.) lines up on Mon→Sun regardless of where the
+// selected range happens to start. Partial weeks at either edge still
+// get a bucket — their day count just reflects what's actually in view.
 function bucketize(view, gran) {
   if (gran === "Daily") return view.map((d) => ({ label: d.label, days: [d] }));
   if (gran === "Weekly") {
-    const out = [];
-    for (let i = 0; i < view.length; i += 7) out.push({ label: fmtDate(view[i].date), days: view.slice(i, i + 7) });
-    return out;
+    const groups = new Map(); // monday-ISO → { mon, days[] }
+    for (const d of view) {
+      const dow = d.date.getDay();           // 0=Sun..6=Sat
+      const diff = (dow + 6) % 7;            // days since Mon
+      const mon = new Date(d.date);
+      mon.setDate(mon.getDate() - diff);
+      mon.setHours(0, 0, 0, 0);
+      const key = mon.getFullYear() + "-" + mon.getMonth() + "-" + mon.getDate();
+      let g = groups.get(key);
+      if (!g) { g = { mon, days: [] }; groups.set(key, g); }
+      g.days.push(d);
+    }
+    return Array.from(groups.values())
+      .sort((a, b) => a.mon - b.mon)
+      .map((g) => ({ label: fmtDate(g.mon), days: g.days }));
   }
   const map = {}, order = [];
   for (const d of view) {
