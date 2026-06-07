@@ -17,6 +17,13 @@ import {
   Customized,
 } from "https://esm.sh/recharts@2.12.7?deps=react@18.3.1,react-dom@18.3.1";
 import htm from "https://esm.sh/htm@3.1.1";
+import {
+  Footprints as IconRun, Bike as IconBike, Waves as IconSwim,
+  Dumbbell as IconStrength, Flame as IconHyrox, HeartPulse as IconCardio,
+  Moon as IconRest, Calendar as IconCalendar, X as IconX, Clock as IconClock,
+  Gauge as IconGauge, MapPin as IconMap, Activity as IconActivity,
+  CheckCircle2 as IconCheck, CalendarClock as IconPlanned, Target as IconTarget,
+} from "https://esm.sh/lucide-react@0.460.0?deps=react@18.3.1";
 
 const html = htm.bind(React.createElement);
 const h = React.createElement;
@@ -616,9 +623,9 @@ function BioTrend({ b }) {
     <div style=${{ flex: 1, minWidth: 0 }}>
       <${ResponsiveContainer} width="100%" height=${CHART_H}>
         <${LineChart} data=${b.series} margin=${{ top: 4, right: 16, left: 0, bottom: 0 }}>
-          <${ReferenceArea} y1=${optLo} y2=${optHi} fill="#34d399" fillOpacity=${0.10} />
-          <${ReferenceLine} y=${optHi} stroke="rgba(255,255,255,0.08)" />
-          <${ReferenceLine} y=${optLo} stroke="rgba(255,255,255,0.08)" />
+          <${ReferenceArea} y1=${optLo} y2=${optHi} fill="#10b981" fillOpacity=${0.22} />
+          <${ReferenceLine} y=${optHi} stroke="#10b981" strokeOpacity=${0.35} />
+          <${ReferenceLine} y=${optLo} stroke="#10b981" strokeOpacity=${0.35} />
           <${XAxis} type="number" dataKey="x" domain=${b.xDomain} ticks=${b.xticks} interval=${0}
             tickFormatter=${(x) => b.labelByX[x] || ""} tick=${{ fill: C.muted, fontSize: 10 }}
             tickLine=${false} axisLine=${{ stroke: C.border }} height=${XAXIS_H} />
@@ -1499,6 +1506,412 @@ function RecommendationsView() {
   </div>`;
 }
 
+// ---------- calendar ----------
+// Week-by-week training log. Renders completed + planned workouts grouped
+// by week, with per-week targets (time/load/distance) and a detail drawer
+// per workout. Lazy-loaded from ?resource=calendar so the Training tab
+// doesn't pay the cost.
+
+const CAL_ZONES = [
+  { key: "z1", label: "Z1", name: "Recovery",  color: "#5b6b82" },
+  { key: "z2", label: "Z2", name: "Endurance", color: "#22c55e" },
+  { key: "z3", label: "Z3", name: "Tempo",     color: "#eab308" },
+  { key: "z4", label: "Z4", name: "Threshold", color: "#f97316" },
+  { key: "z5", label: "Z5", name: "VO2max",    color: "#ef4444" },
+];
+const CAL_SPORT_ICON = {
+  run: IconRun, bike: IconBike, swim: IconSwim,
+  strength: IconStrength, hyrox: IconHyrox, cardio: IconCardio,
+};
+const CAL_SPORT_LABEL = {
+  run: "Run", bike: "Bike", swim: "Swim",
+  strength: "Strength", hyrox: "Hyrox", cardio: "Cardio",
+};
+const CAL_TYPE_COLOR = {
+  "VO2 Max": "#ef4444", "Threshold": "#f97316", "Tempo": "#eab308",
+  "Endurance": "#22c55e", "Recovery": "#5b6b82",
+  "Strength": "#a855f7", "Rest": "#5d6b7e",
+};
+const CAL_WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const CAL_MO = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function calFmtDur(min) {
+  min = Math.round(min);
+  if (min <= 0) return "0m";
+  const h = Math.floor(min / 60), m = min % 60;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
+}
+function calFmtDay(iso) {
+  const x = new Date(iso + "T00:00:00");
+  return `${CAL_WD[x.getDay()]} ${String(x.getDate()).padStart(2, "0")} ${CAL_MO[x.getMonth()]}`;
+}
+function calFmtRange(a, b) {
+  const x = new Date(a + "T00:00:00"), y = new Date(b + "T00:00:00");
+  return `${x.getDate()} ${CAL_MO[x.getMonth()]} – ${y.getDate()} ${CAL_MO[y.getMonth()]}`;
+}
+
+// Classify a workout from its time-in-zones. Mirrors the design spec —
+// VO2/Threshold/Tempo/Endurance/Recovery thresholds tuned for HYROX-style
+// training where short Z5 spikes still count as VO2 work.
+function calClassify(w) {
+  if (w.sport === "strength") {
+    return { type: "Strength", reason: "Resistance session — load is muscular work, not aerobic zones." };
+  }
+  const z = w.zones || {};
+  const mins = CAL_ZONES.map((zo) => z[zo.key] || 0);
+  const total = mins.reduce((a, b) => a + b, 0);
+  if (total === 0) return { type: "Rest", reason: "No recorded training time." };
+  const [, m2, m3, m4, m5] = mins;
+  const p = mins.map((m) => m / total);
+  if (m5 >= 3 || p[4] >= 0.05) {
+    return { type: "VO2 Max", reason: `${calFmtDur(m5)} above Z4 — enough top-end work to target VO2max.` };
+  }
+  if (m4 >= 8 || p[3] >= 0.15) {
+    return { type: "Threshold", reason: `${calFmtDur(m4)} in Z4 — the quality work sat at threshold.` };
+  }
+  if (m3 >= 12 || p[2] >= 0.20) {
+    return { type: "Tempo", reason: `${calFmtDur(m3)} in Z3 — sustained tempo effort.` };
+  }
+  if (p[0] >= 0.6) {
+    return { type: "Recovery", reason: `${Math.round(p[0] * 100)}% of time in Z1 — easy, restorative.` };
+  }
+  return { type: "Endurance", reason: `Mostly Z2 (${Math.round(p[1] * 100)}%) — aerobic base.` };
+}
+
+function CalZoneBar({ zones, height = 8 }) {
+  const total = CAL_ZONES.reduce((a, z) => a + (zones[z.key] || 0), 0) || 1;
+  return html`<div style=${{ display: "flex", height, width: "100%", borderRadius: 999, overflow: "hidden", background: C.grid }}>
+    ${CAL_ZONES.map((z) => {
+      const v = zones[z.key] || 0;
+      if (!v) return null;
+      return html`<div key=${z.key} title=${`${z.label} ${z.name} · ${calFmtDur(v)}`}
+        style=${{ width: `${(v / total) * 100}%`, background: z.color }} />`;
+    })}
+  </div>`;
+}
+
+function CalMetric({ label, value, color }) {
+  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 10, padding: "6px 11px", minWidth: 62 }}>
+    <div style=${{ fontSize: 9.5, letterSpacing: 0.8, textTransform: "uppercase", color: C.muted, fontWeight: 600 }}>${label}</div>
+    <div style=${{ fontSize: 17, fontWeight: 700, color: color || C.text, lineHeight: 1.1 }}>${value}</div>
+  </div>`;
+}
+
+// Target progress row. Fill = projected total (done + planned), capped at
+// the target line. Pct turns green once projected ≥ target.
+function CalTargetRow({ label, kind, m }) {
+  const done = m.done || 0, plan = m.plan || 0, target = m.target;
+  const projected = done + plan;
+  const hasT = target != null && target > 0;
+  const POS = 0.75; // target line sits at 75% of the bar regardless of value
+  const ratio = hasT ? projected / target : 1;
+  const fillFrac = hasT ? Math.min(ratio * POS, 1) : 0;
+  const meet = hasT && projected >= target;
+  const compact = kind === "time"
+    ? (v) => calFmtDur(v).replace(/\s/g, "")
+    : kind === "distance"
+    ? (v) => v.toFixed(1)
+    : (v) => `${Math.round(v)}`;
+  const projStr = compact(projected);
+  const tStr = hasT
+    ? (kind === "time" ? calFmtDur(target).replace(/\s/g, "")
+      : kind === "distance" ? `${target.toFixed(1)} km`
+      : `${Math.round(target)}`)
+    : "";
+  const valFull = hasT ? null : (kind === "distance" ? `${projStr} km` : projStr);
+  const pctTxt = hasT ? `${Math.round(ratio * 100)}%` : "—";
+  const pctColor = !hasT ? C.muted : meet ? C.green : C.amber;
+  return html`<div style=${{ display: "grid", gridTemplateColumns: "54px 96px 1fr 34px", alignItems: "center", gap: 8 }}>
+    <span style=${{ fontSize: 9.5, letterSpacing: 0.5, textTransform: "uppercase", color: C.muted, fontWeight: 600 }}>${label}</span>
+    <span style=${{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", color: C.text }}>
+      ${hasT
+        ? html`<span>${projStr}<span style=${{ color: C.muted, fontWeight: 500 }}> / ${tStr}</span></span>`
+        : valFull}
+    </span>
+    <div style=${{ position: "relative", height: 9 }}>
+      <div style=${{ position: "absolute", top: 0, left: 0, right: 0, height: 9, borderRadius: 999, background: C.grid, overflow: "hidden" }}>
+        <div style=${{ height: "100%", width: `${fillFrac * 100}%`, background: C.cyan }} />
+      </div>
+      ${hasT ? html`<div title=${`target ${tStr}`} style=${{ position: "absolute", top: -3, height: 15, left: `calc(${POS * 100}% - 1px)`, width: 2, background: C.text, borderRadius: 2 }} />` : null}
+    </div>
+    <span style=${{ fontSize: 11, fontWeight: 700, color: pctColor, textAlign: "right" }}>${pctTxt}</span>
+  </div>`;
+}
+
+function CalCard({ w, date, onClick }) {
+  const cls = calClassify(w);
+  const Icon = CAL_SPORT_ICON[w.sport] || IconCardio;
+  const planned = w.status === "planned";
+  const tc = CAL_TYPE_COLOR[cls.type] || C.muted;
+  const baseStyle = { width: "100%", textAlign: "left", cursor: "pointer", marginBottom: 7, borderRadius: 10, padding: "8px 9px", color: C.text, transition: "transform .12s, box-shadow .12s" };
+  const style = planned
+    ? { ...baseStyle, background: "transparent", backgroundImage: `repeating-linear-gradient(45deg, ${C.border}55 0 1px, transparent 1px 8px)`, border: `1px dashed ${tc}77`, borderLeft: `3px dashed ${tc}` }
+    : { ...baseStyle, background: C.card, border: `1px solid ${tc}44`, borderLeft: `3px solid ${tc}` };
+  return html`<button onClick=${() => onClick({ w, date })} style=${style}
+    onMouseEnter=${(e) => { e.currentTarget.style.transform = "translateY(-1px)"; e.currentTarget.style.boxShadow = `0 4px 16px ${tc}22`; }}
+    onMouseLeave=${(e) => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = ""; }}>
+    <div style=${{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+      <${Icon} size=${13} color=${tc} />
+      <span style=${{ fontSize: 12, fontWeight: 700 }}>${calFmtDur(w.duration)}</span>
+      ${w.distance ? html`<span style=${{ fontSize: 11, color: C.muted, fontWeight: 600 }}>${w.distance.toFixed(1)} km</span>` : null}
+      <span style=${{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: C.cyan }}>${w.load}</span>
+    </div>
+    <div style=${{ fontSize: 11.5, lineHeight: 1.25, marginBottom: 6, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", minHeight: 28 }}>${w.name}</div>
+    ${Object.keys(w.zones || {}).length > 0 ? html`<div style=${{ marginBottom: 6 }}><${CalZoneBar} zones=${w.zones} height=${4} /></div>` : null}
+    <div style=${{ display: "flex", alignItems: "center", gap: 6 }}>
+      <span style=${{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 600, color: tc }}>
+        <span style=${{ width: 6, height: 6, borderRadius: 999, background: tc }} />${cls.type}
+      </span>
+      <span style=${{ marginLeft: "auto", fontSize: 10, color: C.muted }}>${!planned && w.avgHr ? `${w.avgHr} bpm` : ""}</span>
+    </div>
+  </button>`;
+}
+
+function CalWeekBlock({ wk, todayIso, filter, isMobile, onSelect, todayRef }) {
+  const isCurrent = todayIso >= wk.start && todayIso <= wk.end;
+  const allW = wk.days.flatMap((day) => day.workouts);
+  const completed = allW.filter((w) => w.status === "completed");
+  const planned = allW.filter((w) => w.status === "planned");
+  const sum = (arr, f) => arr.reduce((a, w) => a + (f(w) || 0), 0);
+  const metrics = {
+    time: { done: sum(completed, (w) => w.duration), plan: sum(planned, (w) => w.duration), target: wk.targets?.time },
+    load: { done: sum(completed, (w) => w.load), plan: sum(planned, (w) => w.load), target: wk.targets?.load },
+    distance: { done: sum(completed, (w) => w.distance), plan: sum(planned, (w) => w.distance), target: wk.targets?.distance },
+  };
+  const zt = {};
+  CAL_ZONES.forEach((z) => { zt[z.key] = sum(allW, (w) => w.zones && w.zones[z.key]); });
+  const zSum = Object.values(zt).reduce((a, b) => a + b, 0) || 1;
+  const formColor = wk.form != null && wk.form < -10 ? C.red : wk.form != null && wk.form > 5 ? C.cyan : C.green;
+
+  const dayList = wk.days.map((day) => ({
+    ...day,
+    workouts: day.workouts.filter((w) => filter === "all" || w.status === filter),
+  }));
+
+  const targetsPanel = html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 10 }}>
+    <${CalTargetRow} label="Time" kind="time" m=${metrics.time} />
+    <${CalTargetRow} label="Load" kind="load" m=${metrics.load} />
+    <${CalTargetRow} label="Distance" kind="distance" m=${metrics.distance} />
+  </div>`;
+
+  const zonesBlock = html`<div>
+    <${CalZoneBar} zones=${zt} height=${10} />
+    <div style=${{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 9 }}>
+      ${CAL_ZONES.map((z) => {
+        const v = zt[z.key];
+        if (!v) return null;
+        return html`<div key=${z.key} style=${{ display: "flex", alignItems: "center", gap: 6 }} title=${z.name}>
+          <span style=${{ width: 9, height: 9, borderRadius: 3, background: z.color }} />
+          <span style=${{ fontSize: 11, color: C.muted }}>${z.label}</span>
+          <span style=${{ fontSize: 11, fontWeight: 600, color: C.text }}>${calFmtDur(v)}</span>
+          <span style=${{ fontSize: 10, color: C.muted }}>${Math.round((v / zSum) * 100)}%</span>
+        </div>`;
+      })}
+    </div>
+  </div>`;
+
+  const scheduleGrid = html`<div style=${{ overflowX: isMobile ? "auto" : "visible", margin: "0 -2px", paddingBottom: 4 }}>
+    <div style=${{ display: "grid", gridTemplateColumns: isMobile ? "repeat(7, minmax(150px, 1fr))" : "repeat(7, minmax(0, 1fr))", gap: isMobile ? 8 : 7 }}>
+      ${dayList.map((day) => {
+        const isToday = day.date === todayIso;
+        return html`<div key=${day.date} style=${{ background: isToday ? C.cyan + "0e" : C.card, border: `1px solid ${isToday ? C.cyan + "55" : C.border}`, borderRadius: 12, padding: 8, minHeight: 80 }}>
+          <div style=${{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <span style=${{ fontSize: 11, fontWeight: 700, color: isToday ? C.cyan : C.muted }}>${calFmtDay(day.date)}</span>
+            ${day.hrv ? html`<span title="HRV" style=${{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 10, color: "#f472b6" }}>♥ ${day.hrv}</span>` : null}
+          </div>
+          ${day.workouts.length === 0
+            ? html`<div style=${{ display: "flex", alignItems: "center", gap: 5, color: C.muted, fontSize: 11, padding: "10px 2px" }}><${IconRest} size=${12} /> Rest</div>`
+            : day.workouts.map((w) => html`<${CalCard} key=${w.id} w=${w} date=${day.date} onClick=${onSelect} />`)}
+        </div>`;
+      })}
+    </div>
+  </div>`;
+
+  return html`<div ref=${isCurrent ? todayRef : null} style=${{ background: C.card, border: `1px solid ${isCurrent ? C.cyan + "55" : C.border}`, borderRadius: 16, padding: 16, marginBottom: 16 }}>
+    <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 14 }}>
+      <div>
+        <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style=${{ fontSize: 16, fontWeight: 700, color: C.text }}>Week ${wk.num}</span>
+          ${isCurrent ? html`<span style=${{ fontSize: 10, fontWeight: 700, color: C.bg, background: C.cyan, padding: "2px 7px", borderRadius: 999 }}>THIS WEEK</span>` : null}
+        </div>
+        <div style=${{ fontSize: 12, color: C.muted }}>${calFmtRange(wk.start, wk.end)}</div>
+      </div>
+      <div style=${{ display: "flex", flexWrap: "wrap", gap: 7, marginLeft: "auto" }}>
+        <${CalMetric} label="Fitness" value=${wk.fitness ?? "–"} color=${C.cyan} />
+        <${CalMetric} label="Fatigue" value=${wk.fatigue ?? "–"} color=${C.violet} />
+        <${CalMetric} label="Form" value=${wk.form ?? "–"} color=${formColor} />
+        <${CalMetric} label="Ramp" value=${wk.ramp ?? "–"} color=${C.muted} />
+      </div>
+    </div>
+    ${isMobile
+      ? html`<div>
+          <div style=${{ marginBottom: 12 }}>${targetsPanel}</div>
+          <div style=${{ marginBottom: 12 }}>${zonesBlock}</div>
+          ${scheduleGrid}
+        </div>`
+      : html`<div style=${{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <div style=${{ width: 340, flexShrink: 0 }}>${targetsPanel}</div>
+          <div style=${{ flex: 1, minWidth: 0 }}>
+            <div style=${{ marginBottom: 14 }}>${zonesBlock}</div>
+            ${scheduleGrid}
+          </div>
+        </div>`}
+  </div>`;
+}
+
+function CalDrawer({ sel, open, onClose }) {
+  if (!sel) return null;
+  const { w, date } = sel;
+  const cls = calClassify(w);
+  const Icon = CAL_SPORT_ICON[w.sport] || IconCardio;
+  const planned = w.status === "planned";
+  const tc = CAL_TYPE_COLOR[cls.type] || C.muted;
+  const zSum = CAL_ZONES.reduce((a, z) => a + ((w.zones && w.zones[z.key]) || 0), 0) || 1;
+  const stats = [
+    { l: "Duration", v: calFmtDur(w.duration), Ic: IconClock },
+    ...(w.distance ? [{ l: "Distance", v: `${w.distance.toFixed(1)} km`, Ic: IconMap }] : []),
+    { l: "Load", v: w.load, Ic: IconGauge },
+    ...(!planned && w.avgHr ? [{ l: "Avg HR", v: `${w.avgHr} bpm`, Ic: IconActivity }] : []),
+    ...(w.pace ? [{ l: "Pace", v: w.pace, Ic: IconActivity }] : []),
+  ];
+  return html`<div onClick=${onClose} style=${{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(2,6,14,0.55)", opacity: open ? 1 : 0, transition: "opacity .2s" }}>
+    <div onClick=${(e) => e.stopPropagation()} style=${{ position: "absolute", top: 0, right: 0, height: "100%", width: "min(440px, 92vw)", background: C.card, borderLeft: "1px solid " + C.border, overflowY: "auto", transform: open ? "translateX(0)" : "translateX(100%)", transition: "transform .22s ease", color: C.text }}>
+      <div style=${{ padding: 18, borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.card, zIndex: 1 }}>
+        <div style=${{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+          <div style=${{ width: 34, height: 34, borderRadius: 9, background: tc + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><${Icon} size=${17} color=${tc} /></div>
+          <div style=${{ flex: 1 }}>
+            <div style=${{ fontSize: 11, color: C.muted, marginBottom: 2 }}>${calFmtDay(date)} · ${CAL_SPORT_LABEL[w.sport] || "Cardio"}</div>
+            <div style=${{ fontSize: 16, fontWeight: 700, lineHeight: 1.25 }}>${w.name}</div>
+          </div>
+          <button onClick=${onClose} style=${{ background: "none", border: "none", color: C.muted, cursor: "pointer", padding: 2 }}><${IconX} size=${20} /></button>
+        </div>
+        <div style=${{ display: "flex", gap: 7, marginTop: 11 }}>
+          <span style=${{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: C.text, padding: "2px 8px", borderRadius: 999, background: tc + "22", border: `1px solid ${tc}55` }}>
+            <span style=${{ width: 7, height: 7, borderRadius: 999, background: tc }} />${cls.type}
+          </span>
+          <span style=${{ fontSize: 11, fontWeight: 600, color: planned ? C.amber : C.green, background: (planned ? C.amber : C.green) + "1e", padding: "2px 8px", borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            ${planned
+              ? html`<span><${IconPlanned} size=${11} /> Planned</span>`
+              : html`<span><${IconCheck} size=${11} /> Completed</span>`}
+          </span>
+        </div>
+      </div>
+      <div style=${{ padding: 18 }}>
+        <div style=${{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8, marginBottom: 18 }}>
+          ${stats.map((s) => html`<div key=${s.l} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10, padding: "9px 11px" }}>
+            <div style=${{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: C.muted, marginBottom: 2 }}><${s.Ic} size=${11} /> ${s.l}</div>
+            <div style=${{ fontSize: 15, fontWeight: 700 }}>${s.v}</div>
+          </div>`)}
+        </div>
+        <div style=${{ background: tc + "12", border: `1px solid ${tc}40`, borderRadius: 12, padding: 13, marginBottom: 18 }}>
+          <div style=${{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: tc, marginBottom: 5 }}>
+            <${IconTarget} size=${13} /> ${planned ? "PROJECTED" : "DETECTED"} · ${cls.type.toUpperCase()}
+          </div>
+          <div style=${{ fontSize: 12.5, color: C.muted, lineHeight: 1.5 }}>${cls.reason}</div>
+        </div>
+        ${zSum > 1 ? html`<div style=${{ marginBottom: 18 }}>
+          <div style=${{ fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", color: C.muted, fontWeight: 600, marginBottom: 9 }}>
+            Time in zones${planned ? html`<span style=${{ textTransform: "none", letterSpacing: 0 }}> (target)</span>` : null}
+          </div>
+          ${CAL_ZONES.map((z) => {
+            const v = (w.zones && w.zones[z.key]) || 0;
+            return html`<div key=${z.key} style=${{ display: "flex", alignItems: "center", gap: 9, marginBottom: 7 }}>
+              <span style=${{ width: 22, fontSize: 11, fontWeight: 700, color: z.color }}>${z.label}</span>
+              <div style=${{ flex: 1, height: 8, borderRadius: 999, background: C.grid, overflow: "hidden" }}>
+                <div style=${{ width: `${(v / zSum) * 100}%`, height: "100%", background: z.color }} />
+              </div>
+              <span style=${{ width: 52, textAlign: "right", fontSize: 11, fontWeight: 600 }}>${v ? calFmtDur(v) : "–"}</span>
+              <span style=${{ width: 34, textAlign: "right", fontSize: 10, color: C.muted }}>${Math.round((v / zSum) * 100)}%</span>
+            </div>`;
+          })}
+        </div>` : null}
+        ${w.description ? html`<div>
+          <div style=${{ fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", color: C.muted, fontWeight: 600, marginBottom: 9 }}>Description</div>
+          <div style=${{ fontSize: 13, color: C.muted, lineHeight: 1.6, whiteSpace: "pre-line", background: C.bg, border: "1px solid " + C.border, borderRadius: 10, padding: 13 }}>${w.description}</div>
+        </div>` : null}
+      </div>
+    </div>
+  </div>`;
+}
+
+function CalendarView() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const [sel, setSel] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const todayRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const mq = window.matchMedia("(max-width: 760px)");
+    const on = () => setIsMobile(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+
+  React.useEffect(() => {
+    if (data || err) return;
+    const params = new URLSearchParams(location.search);
+    const token = params.get("t") || params.get("token") || "";
+    fetch("https://ptisuvfdufngdfxfrzvn.supabase.co/functions/v1/dashboard?resource=calendar&token=" + encodeURIComponent(token))
+      .then(async (r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then((d) => setData(d))
+      .catch((e) => setErr(String(e.message || e)));
+  }, [data, err]);
+
+  React.useEffect(() => {
+    if (sel) requestAnimationFrame(() => setDrawerOpen(true));
+  }, [sel]);
+
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setTimeout(() => setSel(null), 200);
+  };
+
+  if (err) return html`<div style=${{ color: C.red }} className="text-sm">Failed to load calendar: ${err}</div>`;
+  if (!data) return html`<div style=${{ color: C.muted }} className="text-sm">Loading calendar…</div>`;
+
+  const filterBtn = (val, label) => html`<button key=${val} onClick=${() => setFilter(val)}
+    style=${{ cursor: "pointer", fontSize: 11.5, fontWeight: 600, padding: "5px 11px", borderRadius: 999, border: "1px solid " + (filter === val ? C.cyan : C.border), background: filter === val ? C.cyan : "transparent", color: filter === val ? C.bg : C.muted }}>${label}</button>`;
+
+  return html`<div>
+    <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 12, marginBottom: 18 }}>
+      <div>
+        <div style=${{ fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", color: C.muted, fontWeight: 600 }}>Training Log</div>
+        <div style=${{ fontSize: 26, fontWeight: 700, display: "flex", alignItems: "center", gap: 9, color: C.text }}>
+          <${IconCalendar} size=${22} color=${C.cyan} /> Calendar
+        </div>
+        <div style=${{ fontSize: 12, color: C.muted, marginTop: 2 }}>Completed & planned workouts · auto-classified by intensity · tracked against weekly targets</div>
+      </div>
+      <div style=${{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <div style=${{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: C.muted }}>
+          <span style=${{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span style=${{ width: 13, height: 13, borderRadius: 3, background: C.cyan }} />Completed
+          </span>
+          <span style=${{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <span style=${{ width: 13, height: 13, borderRadius: 3, border: "1px dashed " + C.cyan, backgroundImage: `repeating-linear-gradient(45deg, ${C.cyan} 0 2px, transparent 2px 5px)` }} />Planned
+          </span>
+        </div>
+        <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
+          ${filterBtn("all", "All")}${filterBtn("completed", "Completed")}${filterBtn("planned", "Planned")}
+          <button onClick=${() => todayRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
+            style=${{ cursor: "pointer", fontSize: 11.5, fontWeight: 600, padding: "5px 11px", borderRadius: 999, border: "1px solid " + C.border, background: C.card, color: C.muted }}>Today</button>
+        </div>
+      </div>
+    </div>
+
+    ${data.weeks.map((wk) => html`<${CalWeekBlock} key=${wk.start} wk=${wk} todayIso=${data.today} filter=${filter} isMobile=${isMobile} onSelect=${setSel} todayRef=${todayRef} />`)}
+
+    <${CalDrawer} sel=${sel} open=${drawerOpen} onClose=${closeDrawer} />
+  </div>`;
+}
+
 // ---------- main ----------
 function App() {
   const [tab, setTab] = useState("Training");
@@ -1823,7 +2236,7 @@ function App() {
   // is conditioned on the active tab so it doesn't show on Biomarkers.
   const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4 flex items-center justify-between" style=${{ borderBottom: "1px solid " + C.border }}>
     <div>
-      ${["Training", "Biomarkers", "Recommendations"].map((t) => {
+      ${["Training", "Calendar", "Biomarkers", "Recommendations"].map((t) => {
         const on = t === tab;
         return html`<button key=${t} onClick=${() => setTab(t)}
           style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1, background: "transparent" }}
@@ -1855,6 +2268,8 @@ function App() {
     </div>` : null}
 
     ${TabBar}
+
+    ${tab === "Calendar" ? html`<div className="max-w-7xl mx-auto"><${CalendarView} /></div>` : null}
 
     ${tab === "Biomarkers" ? html`<div className="max-w-7xl mx-auto"><${BiomarkersView} /></div>` : null}
 
