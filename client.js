@@ -23,7 +23,7 @@ import {
   Moon as IconRest, Calendar as IconCalendar, X as IconX, Clock as IconClock,
   Gauge as IconGauge, MapPin as IconMap, Activity as IconActivity,
   CheckCircle2 as IconCheck, CalendarClock as IconPlanned, Target as IconTarget,
-  ChevronDown as IconChevronDown,
+  ChevronDown as IconChevronDown, RefreshCw as IconRefresh,
 } from "https://esm.sh/lucide-react@0.460.0?deps=react@18.3.1";
 
 const html = htm.bind(React.createElement);
@@ -1962,6 +1962,37 @@ function App() {
     applyTheme(next);
     setTheme(next);
   };
+
+  // Sync button — fires the ingest-only GitHub Actions workflow on demand.
+  // GitHub takes ~30-90s to start the run, then 2-4 min for the ingest
+  // itself, so we don't try to wait for completion — just confirm the
+  // dispatch and surface a toast.
+  const [syncState, setSyncState] = useState("idle"); // idle | dispatching | sent | error
+  const [syncMsg, setSyncMsg] = useState("");
+  async function triggerSync() {
+    if (syncState === "dispatching") return;
+    setSyncState("dispatching");
+    setSyncMsg("");
+    try {
+      const params = new URLSearchParams(location.search);
+      const token = params.get("t") || params.get("token") || "";
+      const r = await fetch(
+        `https://ptisuvfdufngdfxfrzvn.supabase.co/functions/v1/dashboard?resource=sync&token=${encodeURIComponent(token)}`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        throw new Error(`HTTP ${r.status}: ${body || r.statusText}`);
+      }
+      setSyncState("sent");
+      setSyncMsg("Sync started — refresh the page in 2–4 min");
+      setTimeout(() => { setSyncState("idle"); setSyncMsg(""); }, 8000);
+    } catch (e) {
+      setSyncState("error");
+      setSyncMsg(String(e.message || e));
+      setTimeout(() => { setSyncState("idle"); setSyncMsg(""); }, 8000);
+    }
+  }
   const [range, setRange] = useState("6M");
   const [volGran, setVolGran] = useState("Weekly");
   const [zoneGran, setZoneGran] = useState("Weekly");
@@ -2284,13 +2315,33 @@ function App() {
           className="px-4 py-2.5 text-sm font-semibold transition-colors">${t}</button>`;
       })}
     </div>
-    <button onClick=${toggleTheme}
-      title=${theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-      style=${{ background: "transparent", color: C.muted, border: "1px solid " + C.border, borderRadius: 999 }}
-      className="px-3 py-1.5 text-xs font-semibold transition-colors mr-1 mb-2 flex items-center gap-1.5">
-      <span style=${{ fontSize: 14 }}>${theme === "dark" ? "☀" : "☾"}</span>
-      <span>${theme === "dark" ? "Light" : "Dark"}</span>
-    </button>
+    <div className="flex items-center gap-2 mr-1 mb-2">
+      ${syncMsg ? html`<span style=${{ fontSize: 11, color: syncState === "error" ? C.red : C.green, fontWeight: 500 }}>${syncMsg}</span>` : null}
+      <button onClick=${triggerSync}
+        disabled=${syncState === "dispatching"}
+        title="Re-sync all sources (Strava, intervals.icu, sheets)"
+        style=${{
+          background: syncState === "sent" ? C.green + "22" : "transparent",
+          color: syncState === "sent" ? C.green : syncState === "error" ? C.red : C.muted,
+          border: "1px solid " + (syncState === "sent" ? C.green + "55" : syncState === "error" ? C.red + "55" : C.border),
+          borderRadius: 999,
+          cursor: syncState === "dispatching" ? "wait" : "pointer",
+          opacity: syncState === "dispatching" ? 0.7 : 1,
+        }}
+        className="px-3 py-1.5 text-xs font-semibold transition-colors flex items-center gap-1.5">
+        <span style=${{ display: "inline-flex", animation: syncState === "dispatching" ? "calSpin 1s linear infinite" : "none" }}>
+          <${IconRefresh} size=${13} />
+        </span>
+        <span>${syncState === "dispatching" ? "Syncing…" : syncState === "sent" ? "Triggered" : "Sync"}</span>
+      </button>
+      <button onClick=${toggleTheme}
+        title=${theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+        style=${{ background: "transparent", color: C.muted, border: "1px solid " + C.border, borderRadius: 999 }}
+        className="px-3 py-1.5 text-xs font-semibold transition-colors flex items-center gap-1.5">
+        <span style=${{ fontSize: 14 }}>${theme === "dark" ? "☀" : "☾"}</span>
+        <span>${theme === "dark" ? "Light" : "Dark"}</span>
+      </button>
+    </div>
   </div>`;
 
   return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-2 sm:p-6">
