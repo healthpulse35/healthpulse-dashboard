@@ -1622,20 +1622,20 @@ function CalTargetRow({ label, kind, m }) {
   const valFull = hasT ? null : (kind === "distance" ? `${projStr} km` : projStr);
   const pctTxt = hasT ? `${Math.round(ratio * 100)}%` : "—";
   const pctColor = !hasT ? C.muted : meet ? C.green : C.amber;
-  return html`<div style=${{ display: "grid", gridTemplateColumns: "54px 96px 1fr 34px", alignItems: "center", gap: 8 }}>
-    <span style=${{ fontSize: 9.5, letterSpacing: 0.5, textTransform: "uppercase", color: C.muted, fontWeight: 600 }}>${label}</span>
-    <span style=${{ fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", color: C.text }}>
+  return html`<div style=${{ display: "grid", gridTemplateColumns: "44px 82px 1fr 30px", alignItems: "center", gap: 7 }}>
+    <span style=${{ fontSize: 9, letterSpacing: 0.5, textTransform: "uppercase", color: C.muted, fontWeight: 600 }}>${label}</span>
+    <span style=${{ fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap", color: C.text }}>
       ${hasT
         ? html`<span>${projStr}<span style=${{ color: C.muted, fontWeight: 500 }}> / ${tStr}</span></span>`
         : valFull}
     </span>
-    <div style=${{ position: "relative", height: 9 }}>
-      <div style=${{ position: "absolute", top: 0, left: 0, right: 0, height: 9, borderRadius: 999, background: C.grid, overflow: "hidden" }}>
+    <div style=${{ position: "relative", height: 8 }}>
+      <div style=${{ position: "absolute", top: 0, left: 0, right: 0, height: 8, borderRadius: 999, background: C.grid, overflow: "hidden" }}>
         <div style=${{ height: "100%", width: `${fillFrac * 100}%`, background: C.cyan }} />
       </div>
-      ${hasT ? html`<div title=${`target ${tStr}`} style=${{ position: "absolute", top: -3, height: 15, left: `calc(${POS * 100}% - 1px)`, width: 2, background: C.text, borderRadius: 2 }} />` : null}
+      ${hasT ? html`<div title=${`target ${tStr}`} style=${{ position: "absolute", top: -3, height: 14, left: `calc(${POS * 100}% - 1px)`, width: 2, background: C.text, borderRadius: 2 }} />` : null}
     </div>
-    <span style=${{ fontSize: 11, fontWeight: 700, color: pctColor, textAlign: "right" }}>${pctTxt}</span>
+    <span style=${{ fontSize: 10.5, fontWeight: 700, color: pctColor, textAlign: "right" }}>${pctTxt}</span>
   </div>`;
 }
 
@@ -1689,7 +1689,7 @@ function CalWeekBlock({ wk, todayIso, filter, isMobile, onSelect, todayRef }) {
     workouts: day.workouts.filter((w) => filter === "all" || w.status === filter),
   }));
 
-  const targetsPanel = html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 12, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 10 }}>
+  const targetsPanel = html`<div style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 12, padding: "9px 11px", display: "flex", flexDirection: "column", gap: 8 }}>
     <${CalTargetRow} label="Time" kind="time" m=${metrics.time} />
     <${CalTargetRow} label="Load" kind="load" m=${metrics.load} />
     <${CalTargetRow} label="Distance" kind="distance" m=${metrics.distance} />
@@ -1729,34 +1729,25 @@ function CalWeekBlock({ wk, todayIso, filter, isMobile, onSelect, todayRef }) {
   </div>`;
 
   return html`<div ref=${isCurrent ? todayRef : null} style=${{ background: C.card, border: `1px solid ${isCurrent ? C.cyan + "55" : C.border}`, borderRadius: 16, padding: 16, marginBottom: 16 }}>
-    <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 14 }}>
-      <div>
+    <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, marginBottom: 14 }}>
+      <div style=${{ flexShrink: 0 }}>
         <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style=${{ fontSize: 16, fontWeight: 700, color: C.text }}>Week ${wk.num}</span>
           ${isCurrent ? html`<span style=${{ fontSize: 10, fontWeight: 700, color: C.bg, background: C.cyan, padding: "2px 7px", borderRadius: 999 }}>THIS WEEK</span>` : null}
         </div>
         <div style=${{ fontSize: 12, color: C.muted }}>${calFmtRange(wk.start, wk.end)}</div>
       </div>
-      <div style=${{ display: "flex", flexWrap: "wrap", gap: 7, marginLeft: "auto" }}>
+      ${isMobile ? null : html`<div style=${{ flex: "1 1 280px", minWidth: 260, maxWidth: 360 }}>${targetsPanel}</div>`}
+      <div style=${{ display: "flex", flexWrap: "wrap", gap: 7, marginLeft: isMobile ? "auto" : 0 }}>
         <${CalMetric} label="Fitness" value=${wk.fitness ?? "–"} color=${C.cyan} />
         <${CalMetric} label="Fatigue" value=${wk.fatigue ?? "–"} color=${C.violet} />
         <${CalMetric} label="Form" value=${wk.form ?? "–"} color=${formColor} />
         <${CalMetric} label="Ramp" value=${wk.ramp ?? "–"} color=${C.muted} />
       </div>
     </div>
-    ${isMobile
-      ? html`<div>
-          <div style=${{ marginBottom: 12 }}>${targetsPanel}</div>
-          <div style=${{ marginBottom: 12 }}>${zonesBlock}</div>
-          ${scheduleGrid}
-        </div>`
-      : html`<div style=${{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-          <div style=${{ width: 340, flexShrink: 0 }}>${targetsPanel}</div>
-          <div style=${{ flex: 1, minWidth: 0 }}>
-            <div style=${{ marginBottom: 14 }}>${zonesBlock}</div>
-            ${scheduleGrid}
-          </div>
-        </div>`}
+    ${isMobile ? html`<div style=${{ marginBottom: 12 }}>${targetsPanel}</div>` : null}
+    <div style=${{ marginBottom: 14 }}>${zonesBlock}</div>
+    ${scheduleGrid}
   </div>`;
 }
 
