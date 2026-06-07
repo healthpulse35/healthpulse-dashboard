@@ -1668,7 +1668,7 @@ function CalCard({ w, date, onClick }) {
   </button>`;
 }
 
-function CalWeekBlock({ wk, todayIso, filter, isMobile, onSelect, todayRef }) {
+function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
   const isCurrent = todayIso >= wk.start && todayIso <= wk.end;
   const allW = wk.days.flatMap((day) => day.workouts);
   const completed = allW.filter((w) => w.status === "completed");
@@ -1686,7 +1686,7 @@ function CalWeekBlock({ wk, todayIso, filter, isMobile, onSelect, todayRef }) {
 
   const dayList = wk.days.map((day) => ({
     ...day,
-    workouts: day.workouts.filter((w) => filter === "all" || w.status === filter),
+    workouts: day.workouts,
   }));
 
   const targetsPanel = html`<div style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 12, padding: "9px 11px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1728,7 +1728,7 @@ function CalWeekBlock({ wk, todayIso, filter, isMobile, onSelect, todayRef }) {
     </div>
   </div>`;
 
-  return html`<div ref=${isCurrent ? todayRef : null} style=${{ background: C.card, border: `1px solid ${isCurrent ? C.cyan + "55" : C.border}`, borderRadius: 16, padding: 16, marginBottom: 16 }}>
+  return html`<div style=${{ background: C.card, border: `1px solid ${isCurrent ? C.cyan + "55" : C.border}`, borderRadius: 16, padding: 16, marginBottom: 16 }}>
     <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, marginBottom: 14 }}>
       <div style=${{ flexShrink: 0 }}>
         <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1829,11 +1829,10 @@ function CalDrawer({ sel, open, onClose }) {
 function CalendarView() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  const [filter, setFilter] = useState("all");
   const [sel, setSel] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const todayRef = React.useRef(null);
+  const [showPast, setShowPast] = useState(false);
 
   React.useEffect(() => {
     const mq = window.matchMedia("(max-width: 760px)");
@@ -1868,8 +1867,25 @@ function CalendarView() {
   if (err) return html`<div style=${{ color: C.red }} className="text-sm">Failed to load calendar: ${err}</div>`;
   if (!data) return html`<div style=${{ color: C.muted }} className="text-sm">Loading calendar…</div>`;
 
-  const filterBtn = (val, label) => html`<button key=${val} onClick=${() => setFilter(val)}
-    style=${{ cursor: "pointer", fontSize: 11.5, fontWeight: 600, padding: "5px 11px", borderRadius: 999, border: "1px solid " + (filter === val ? C.cyan : C.border), background: filter === val ? C.cyan : "transparent", color: filter === val ? C.bg : C.muted }}>${label}</button>`;
+  // Re-order weeks: current week first, then future weeks (chronological),
+  // then previous weeks behind an expand toggle (most recent first).
+  const todayIso = data.today;
+  const all = data.weeks;
+  const currentIdx = all.findIndex((w) => todayIso >= w.start && todayIso <= w.end);
+  let current = [];
+  let future = [];
+  let past = [];
+  if (currentIdx >= 0) {
+    current = [all[currentIdx]];
+    future = all.slice(currentIdx + 1);
+    past = all.slice(0, currentIdx).reverse();
+  } else if (all.length) {
+    // No current week in range — fall back to showing the latest week as
+    // current and treat everything earlier as past.
+    current = [all[all.length - 1]];
+    past = all.slice(0, -1).reverse();
+  }
+  const renderWk = (wk) => html`<${CalWeekBlock} key=${wk.start} wk=${wk} todayIso=${todayIso} isMobile=${isMobile} onSelect=${setSel} />`;
 
   return html`<div>
     <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 12, marginBottom: 18 }}>
@@ -1880,24 +1896,19 @@ function CalendarView() {
         </div>
         <div style=${{ fontSize: 12, color: C.muted, marginTop: 2 }}>Completed & planned workouts · auto-classified by intensity · tracked against weekly targets</div>
       </div>
-      <div style=${{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <div style=${{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: C.muted }}>
-          <span style=${{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style=${{ width: 13, height: 13, borderRadius: 3, background: C.cyan }} />Completed
-          </span>
-          <span style=${{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <span style=${{ width: 13, height: 13, borderRadius: 3, border: "1px dashed " + C.cyan, backgroundImage: `repeating-linear-gradient(45deg, ${C.cyan} 0 2px, transparent 2px 5px)` }} />Planned
-          </span>
-        </div>
-        <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
-          ${filterBtn("all", "All")}${filterBtn("completed", "Completed")}${filterBtn("planned", "Planned")}
-          <button onClick=${() => todayRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
-            style=${{ cursor: "pointer", fontSize: 11.5, fontWeight: 600, padding: "5px 11px", borderRadius: 999, border: "1px solid " + C.border, background: C.card, color: C.muted }}>Today</button>
-        </div>
-      </div>
     </div>
 
-    ${data.weeks.map((wk) => html`<${CalWeekBlock} key=${wk.start} wk=${wk} todayIso=${data.today} filter=${filter} isMobile=${isMobile} onSelect=${setSel} todayRef=${todayRef} />`)}
+    ${current.map(renderWk)}
+    ${future.map(renderWk)}
+
+    ${past.length ? html`<div style=${{ marginTop: 4 }}>
+      <button onClick=${() => setShowPast((v) => !v)}
+        style=${{ cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 14px", borderRadius: 12, border: "1px dashed " + C.border, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 600, marginBottom: 16 }}>
+        <span style=${{ display: "inline-block", transform: showPast ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .15s" }}>▸</span>
+        ${showPast ? "Hide previous weeks" : `Show ${past.length} previous week${past.length === 1 ? "" : "s"}`}
+      </button>
+      ${showPast ? past.map(renderWk) : null}
+    </div>` : null}
 
     <${CalDrawer} sel=${sel} open=${drawerOpen} onClose=${closeDrawer} />
   </div>`;
