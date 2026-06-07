@@ -23,6 +23,7 @@ import {
   Moon as IconRest, Calendar as IconCalendar, X as IconX, Clock as IconClock,
   Gauge as IconGauge, MapPin as IconMap, Activity as IconActivity,
   CheckCircle2 as IconCheck, CalendarClock as IconPlanned, Target as IconTarget,
+  ChevronDown as IconChevronDown,
 } from "https://esm.sh/lucide-react@0.460.0?deps=react@18.3.1";
 
 const html = htm.bind(React.createElement);
@@ -1916,8 +1917,8 @@ function CalendarView() {
     </div>
 
     ${past.length ? html`<button onClick=${() => setShowPast((v) => !v)}
-      style=${{ cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 14px", borderRadius: 12, border: "1px dashed " + C.border, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 600, marginBottom: 16 }}>
-      <span style=${{ display: "inline-block", transform: showPast ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .15s", lineHeight: 1 }}>▾</span>
+      style=${{ cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 16px", borderRadius: 12, border: "1px solid " + C.cyan + "55", background: C.cyan + "10", color: C.cyan, fontSize: 13, fontWeight: 700, marginBottom: 16, letterSpacing: 0.3 }}>
+      <span style=${{ display: "inline-flex", transform: showPast ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .15s" }}><${IconChevronDown} size=${16} /></span>
       ${showPast ? "Hide previous weeks" : `Show ${past.length} previous week${past.length === 1 ? "" : "s"}`}
     </button>` : null}
     ${showPast ? past.slice().reverse().map(renderWk) : null}

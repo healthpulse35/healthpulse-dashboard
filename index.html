@@ -51,7 +51,12 @@ if (!token) {
     })
     .then(async (data) => {
       window.__DASHBOARD_DATA__ = data;
-      await import("./client.js");
+      // Bucket cache-busting by the day's UTC date — fresh module on a new
+      // day without hammering the server every page load. New deploys within
+      // the same day still land within ~10 min when GH Pages' default
+      // Cache-Control expires.
+      const ver = new Date().toISOString().slice(0, 10);
+      await import(`./client.js?v=${ver}`);
     })
     .catch((err) => {
       document.getElementById("root").innerHTML =
