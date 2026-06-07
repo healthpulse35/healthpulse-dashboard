@@ -1844,7 +1844,7 @@ function CalendarView() {
   const [sel, setSel] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [showPast, setShowPast] = useState(false);
+  const [pastShown, setPastShown] = useState(0);
 
   React.useEffect(() => {
     const mq = window.matchMedia("(max-width: 760px)");
@@ -1916,12 +1916,19 @@ function CalendarView() {
       </div>` : null}
     </div>
 
-    ${past.length ? html`<button onClick=${() => setShowPast((v) => !v)}
-      style=${{ cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 16px", borderRadius: 12, border: "1px solid " + C.cyan + "55", background: C.cyan + "10", color: C.cyan, fontSize: 13, fontWeight: 700, marginBottom: 16, letterSpacing: 0.3 }}>
-      <span style=${{ display: "inline-flex", transform: showPast ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .15s" }}><${IconChevronDown} size=${16} /></span>
-      ${showPast ? "Hide previous weeks" : `Show ${past.length} previous week${past.length === 1 ? "" : "s"}`}
-    </button>` : null}
-    ${showPast ? past.slice().reverse().map(renderWk) : null}
+    ${past.length ? html`<div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+      ${pastShown < past.length ? html`<button onClick=${() => setPastShown((n) => Math.min(n + 1, past.length))}
+        style=${{ cursor: "pointer", flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 16px", borderRadius: 12, border: "1px solid " + C.cyan + "55", background: C.cyan + "10", color: C.cyan, fontSize: 13, fontWeight: 700, letterSpacing: 0.3 }}>
+        <${IconChevronDown} size=${16} />
+        Show previous week
+        <span style=${{ color: C.cyan + "aa", fontWeight: 500 }}>(${past.length - pastShown} left)</span>
+      </button>` : null}
+      ${pastShown > 0 ? html`<button onClick=${() => setPastShown(0)}
+        style=${{ cursor: "pointer", padding: "12px 14px", borderRadius: 12, border: "1px solid " + C.border, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 600 }}>
+        Hide
+      </button>` : null}
+    </div>` : null}
+    ${pastShown > 0 ? past.slice(0, pastShown).slice().reverse().map(renderWk) : null}
 
     ${current.map(renderWk)}
     ${future.map(renderWk)}
