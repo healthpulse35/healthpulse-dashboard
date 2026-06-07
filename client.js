@@ -1550,6 +1550,19 @@ function calFmtRange(a, b) {
   const x = new Date(a + "T00:00:00"), y = new Date(b + "T00:00:00");
   return `${x.getDate()} ${CAL_MO[x.getMonth()]} – ${y.getDate()} ${CAL_MO[y.getMonth()]}`;
 }
+function calRelTime(iso) {
+  if (!iso) return "never";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "—";
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 14) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
 // Classify a workout from its time-in-zones. Mirrors the design spec —
 // VO2/Threshold/Tempo/Endurance/Recovery thresholds tuned for HYROX-style
@@ -1781,11 +1794,9 @@ function CalDrawer({ sel, open, onClose }) {
           <span style=${{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: C.text, padding: "2px 8px", borderRadius: 999, background: tc + "22", border: `1px solid ${tc}55` }}>
             <span style=${{ width: 7, height: 7, borderRadius: 999, background: tc }} />${cls.type}
           </span>
-          <span style=${{ fontSize: 11, fontWeight: 600, color: planned ? C.amber : C.green, background: (planned ? C.amber : C.green) + "1e", padding: "2px 8px", borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 4 }}>
-            ${planned
-              ? html`<span><${IconPlanned} size=${11} /> Planned</span>`
-              : html`<span><${IconCheck} size=${11} /> Completed</span>`}
-          </span>
+          ${planned ? html`<span style=${{ fontSize: 11, fontWeight: 600, color: C.amber, background: C.amber + "1e", padding: "2px 8px", borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <${IconPlanned} size=${11} /> Planned
+          </span>` : null}
         </div>
       </div>
       <div style=${{ padding: 18 }}>
@@ -1896,19 +1907,23 @@ function CalendarView() {
         </div>
         <div style=${{ fontSize: 12, color: C.muted, marginTop: 2 }}>Completed & planned workouts · auto-classified by intensity · tracked against weekly targets</div>
       </div>
+      ${data.syncs ? html`<div style=${{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, fontSize: 10, color: C.muted, lineHeight: 1.35 }}>
+        <div style=${{ fontSize: 9, letterSpacing: 1, textTransform: "uppercase", fontWeight: 600 }}>Last sync</div>
+        <div>Intervals.icu · <span style=${{ color: C.text }}>${calRelTime(data.syncs.intervals_icu)}</span></div>
+        <div>Strava · <span style=${{ color: C.text }}>${calRelTime(data.syncs.strava)}</span></div>
+        <div>Spreadsheet · <span style=${{ color: C.text }}>${calRelTime(data.syncs.spreadsheet)}</span></div>
+      </div>` : null}
     </div>
+
+    ${past.length ? html`<button onClick=${() => setShowPast((v) => !v)}
+      style=${{ cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 14px", borderRadius: 12, border: "1px dashed " + C.border, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 600, marginBottom: 16 }}>
+      <span style=${{ display: "inline-block", transform: showPast ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .15s", lineHeight: 1 }}>▾</span>
+      ${showPast ? "Hide previous weeks" : `Show ${past.length} previous week${past.length === 1 ? "" : "s"}`}
+    </button>` : null}
+    ${showPast ? past.slice().reverse().map(renderWk) : null}
 
     ${current.map(renderWk)}
     ${future.map(renderWk)}
-
-    ${past.length ? html`<div style=${{ marginTop: 4 }}>
-      <button onClick=${() => setShowPast((v) => !v)}
-        style=${{ cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 14px", borderRadius: 12, border: "1px dashed " + C.border, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 600, marginBottom: 16 }}>
-        <span style=${{ display: "inline-block", transform: showPast ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .15s" }}>▸</span>
-        ${showPast ? "Hide previous weeks" : `Show ${past.length} previous week${past.length === 1 ? "" : "s"}`}
-      </button>
-      ${showPast ? past.map(renderWk) : null}
-    </div>` : null}
 
     <${CalDrawer} sel=${sel} open=${drawerOpen} onClose=${closeDrawer} />
   </div>`;
