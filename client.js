@@ -1603,10 +1603,11 @@ function calClassify(w) {
   if (m3 >= 12 || p[2] >= 0.20) {
     return { type: "Tempo", reason: `${calFmtDur(m3)} in Z3 — sustained tempo effort.` };
   }
-  if (p[0] >= 0.6) {
-    return { type: "Recovery", reason: `${Math.round(p[0] * 100)}% of time in Z1 — easy, restorative.` };
+  const hardShare = p[2] + p[3] + p[4]; // Z3 + Z4 + Z5
+  if (p[0] >= 0.6 && hardShare < 0.1) {
+    return { type: "Recovery", reason: `${Math.round(p[0] * 100)}% of time in Z1 with <10% above Z2 — easy, restorative.` };
   }
-  return { type: "Endurance", reason: `Mostly Z2 (${Math.round(p[1] * 100)}%) — aerobic base.` };
+  return { type: "Endurance", reason: `Mostly easy (${Math.round(p[1] * 100)}% Z2) — aerobic base.` };
 }
 
 function CalZoneBar({ zones, height = 8 }) {
