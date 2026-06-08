@@ -561,6 +561,7 @@ function parseBio(b, viewMode) {
     const d = parseISO(h.test_date);
     return {
       x: i,
+      iso: h.test_date,
       label: d.getDate() + " " + BIO_MON_SHORT[d.getMonth()] + " " + String(d.getFullYear()).slice(2),
       value: Number(h.value),
     };
@@ -677,12 +678,59 @@ const BIO_PERF_GROUPS = [
   { name: "Gut Health", desc: "Metabolic and inflammatory markers relevant to gut and digestive function.", members: ["Cortisol - AM", "Fasting Blood Glucose (FBG)", "HDL Cholesterol", "HbA1c", "HS-CRP", "Triglycerides"] },
 ];
 
-// 0-100 group score: average of per-marker points (4=20, 3=45, 2=70, 1=100),
-// so a couple of red flags drop the ring sharply without being smoothed out.
+// 0-100 group score: weighted average of per-marker points
+// (4=20, 3=45, 2=70, 1=100). Stale markers (latest reading more than 60d
+// behind the dataset) carry only 0.4× weight so they don't dominate a
+// category score when no fresh data confirms them.
 const BIO_GROUP_PTS = { 1: 100, 2: 70, 3: 45, 4: 20 };
 function bioGroupScore(items) {
-  const v = items.filter((i) => i.sev >= 1).map((i) => BIO_GROUP_PTS[i.sev]);
-  return v.length ? Math.round(v.reduce((s, x) => s + x, 0) / v.length) : null;
+  const filtered = items.filter((i) => i.sev >= 1 && BIO_GROUP_PTS[i.sev] != null);
+  if (!filtered.length) return null;
+  let total = 0, weight = 0;
+  for (const it of filtered) {
+    const w = it.stale ? 0.4 : 1.0;
+    total += BIO_GROUP_PTS[it.sev] * w;
+    weight += w;
+  }
+  return weight > 0 ? Math.round(total / weight) : null;
+}
+
+// Compute the category score at every distinct test date present across
+// the items. For each date, each marker uses its latest reading at or
+// before that date; markers without any reading yet are skipped. Stale
+// weighting is not applied historically — we only know freshness at the
+// current snapshot.
+function bioGroupScoreHistory(items) {
+  const dates = new Set();
+  for (const it of items) for (const s of it.series || []) if (s.iso) dates.add(s.iso);
+  const sorted = Array.from(dates).sort();
+  function bandIdxFor(value, ranges) {
+    if (value == null || !ranges) return -1;
+    for (let i = 0; i < 7; i++) {
+      const r = ranges[i];
+      if (value >= r.lo && (value < r.hi || i === 6)) return i;
+    }
+    return value < ranges[0].lo ? 0 : 6;
+  }
+  const BAND_LABEL = ["Very Low","Low","Moderately Low","Optimal","Moderately High","High","Very High"];
+  return sorted.map((d) => {
+    let total = 0, n = 0;
+    for (const it of items) {
+      const series = it.series || [];
+      let val = null;
+      for (const s of series) {
+        if (s.iso && s.iso <= d) val = s.value; else break;
+      }
+      if (val == null) continue;
+      const idx = bandIdxFor(val, it.ranges);
+      if (idx < 0) continue;
+      const sev = BIO_SCORE_SEV[BAND_LABEL[idx]] ?? 0;
+      if (sev < 1) continue;
+      total += BIO_GROUP_PTS[sev];
+      n += 1;
+    }
+    return { iso: d, score: n ? Math.round(total / n) : null, n };
+  });
 }
 function bioGroupScoreLabel(s) {
   if (s == null) return { w: "No score", c: C.muted };
@@ -693,16 +741,76 @@ function bioGroupScoreLabel(s) {
   return         { w: "Needs work", c: "#ef4444" };
 }
 
-function ScoreRing({ score, color }) {
+function ScoreRing({ score, color, onClick }) {
   const R = 32, CC = 2 * Math.PI * R;
   const pct = score == null ? 0 : Math.max(0, Math.min(100, score));
   const off = CC * (1 - pct / 100);
-  return html`<svg width="86" height="86" viewBox="0 0 86 86">
+  const ring = html`<svg width="86" height="86" viewBox="0 0 86 86">
     <circle cx="43" cy="43" r=${R} fill="none" stroke=${C.border} strokeWidth="8" />
     <circle cx="43" cy="43" r=${R} fill="none" stroke=${color} strokeWidth="8" strokeLinecap="round"
       strokeDasharray=${CC} strokeDashoffset=${off} transform="rotate(-90 43 43)" />
     <text x="43" y="43" textAnchor="middle" dominantBaseline="central" fill=${C.text} fontSize="24" fontWeight="700">${score == null ? "–" : score}</text>
   </svg>`;
+  if (!onClick) return ring;
+  return html`<button onClick=${onClick} title="Show score over time"
+    style=${{ background: "transparent", border: "none", padding: 0, cursor: "pointer", borderRadius: 99 }}
+    className="transition-transform hover:scale-105">${ring}</button>`;
+}
+
+// Modal showing a category's score over time. Driven by bioGroupScoreHistory.
+function CategoryHistoryModal({ group, items, onClose }) {
+  if (!group) return null;
+  const series = bioGroupScoreHistory(items).filter((p) => p.score != null);
+  const data = series.map((p) => {
+    const d = parseISO(p.iso);
+    return {
+      x: p.iso,
+      label: d.getDate() + " " + BIO_MON_SHORT[d.getMonth()] + " " + String(d.getFullYear()).slice(2),
+      score: p.score,
+      n: p.n,
+    };
+  });
+  const latest = data.length ? data[data.length - 1] : null;
+  const prev = data.length > 1 ? data[data.length - 2] : null;
+  const delta = latest && prev ? latest.score - prev.score : null;
+  return html`<div onClick=${onClose} style=${{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(2,6,14,0.6)" }} className="flex items-center justify-center p-4">
+    <div onClick=${(e) => e.stopPropagation()} style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14, width: "min(640px, 100%)" }}>
+      <div className="flex items-start justify-between gap-3 p-5 border-b" style=${{ borderColor: C.border }}>
+        <div>
+          <div className="text-[10px] uppercase font-semibold" style=${{ color: C.muted, letterSpacing: "0.08em" }}>Category score over time</div>
+          <div className="text-lg font-bold mt-0.5" style=${{ color: C.text }}>${group.name}</div>
+          <div className="text-xs mt-1" style=${{ color: C.muted }}>${items.length} markers · ${data.length} test ${data.length === 1 ? "date" : "dates"}</div>
+        </div>
+        <div className="text-right shrink-0">
+          ${latest ? html`<div className="text-3xl font-bold" style=${{ color: C.text }}>${latest.score}</div>` : null}
+          ${delta != null ? html`<div className="text-xs font-semibold mt-0.5" style=${{ color: delta > 0 ? C.green : delta < 0 ? C.red : C.muted }}>
+            ${delta > 0 ? "+" : ""}${delta} vs prior
+          </div>` : null}
+          <button onClick=${onClose} className="text-xs mt-2" style=${{ color: C.muted, border: "1px solid " + C.border, borderRadius: 999, padding: "3px 10px", cursor: "pointer", background: "transparent" }}>Close</button>
+        </div>
+      </div>
+      <div className="p-5">
+        ${data.length < 2 ? html`<div className="text-sm py-8 text-center" style=${{ color: C.muted }}>
+          Only one test date in this category — need at least two to plot a trend.
+        </div>` : html`<${ResponsiveContainer} width="100%" height=${260}>
+          <${LineChart} data=${data} margin=${{ top: 8, right: 12, left: -12, bottom: 0 }}>
+            <${CartesianGrid} stroke=${C.grid} strokeDasharray="3 3" vertical=${false} />
+            <${XAxis} dataKey="label" tick=${{ fill: C.muted, fontSize: 11 }} axisLine=${{ stroke: C.border }} tickLine=${false} />
+            <${YAxis} domain=${[0, 100]} tick=${{ fill: C.muted, fontSize: 11 }} axisLine=${{ stroke: C.border }} tickLine=${false} />
+            <${Tooltip} contentStyle=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 8, fontSize: 12, color: C.text }}
+              labelStyle=${{ color: C.muted }}
+              formatter=${(v, _n, p) => [v + " / 100 (" + p.payload.n + " markers)", "Score"]} />
+            <${ReferenceLine} y=${80} stroke=${C.green} strokeDasharray="3 3" label=${{ value: "Optimal", fill: C.green, fontSize: 10, position: "insideTopRight" }} />
+            <${ReferenceLine} y=${50} stroke=${C.amber} strokeDasharray="3 3" />
+            <${Line} type="monotone" dataKey="score" stroke=${C.cyan} strokeWidth=${2.5} dot=${{ r: 4, fill: C.cyan, stroke: C.bg, strokeWidth: 2 }} activeDot=${{ r: 6 }} isAnimationActive=${false} />
+          <//>
+        <//>`}
+        <div className="text-[11px] mt-4" style=${{ color: C.muted }}>
+          Score uses the latest reading per marker at each test date. Markers without a reading by that date are excluded. Stale-weighting only applies to the current snapshot, not history.
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
 // Horizontal 7-segment band bar with a white tick at the current value.
@@ -794,6 +902,7 @@ function BiomarkersView() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [modal, setModal] = useState(null);
+  const [historyGroup, setHistoryGroup] = useState(null);
   const [viewMode, setViewMode] = useState("Clinical");
   React.useEffect(() => {
     if (data || err) return;
@@ -865,7 +974,7 @@ function BiomarkersView() {
     return html`<div key=${key} style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-5">
       <div className="flex items-center gap-4 mb-4">
         <div className="flex flex-col items-center shrink-0" style=${{ width: 100 }}>
-          <${ScoreRing} score=${score} color=${sl.c} />
+          <${ScoreRing} score=${score} color=${sl.c} onClick=${() => setHistoryGroup(g)} />
           <div style=${{ color: sl.c }} className="text-sm font-semibold mt-1">${sl.w}</div>
         </div>
         <div className="flex-1 min-w-0">
@@ -934,6 +1043,7 @@ function BiomarkersView() {
         <${MarkerDetail} b=${modalBio} />
       </div>
     </div>` : null}
+    <${CategoryHistoryModal} group=${historyGroup} items=${historyGroup ? historyGroup.items : []} onClose=${() => setHistoryGroup(null)} />
   </div>`;
 }
 
@@ -1126,8 +1236,20 @@ const RECOMMENDATION_RULES = [
     accent: "#f97316",
     icon: ICON.shield,
     triggers: ["Ferritin", "Iron", "% Transferrin Saturation", "Hemoglobin"],
+    fire(byName) {
+      // Only fire as iron-support when at least one indicator is low — high
+      // ferritin / hemoglobin needs the separate iron-overload rule, not
+      // "eat more red meat" advice.
+      return this.triggers.some((n) => {
+        const b = byName[n];
+        return b && b.sev >= 2 && /Low/i.test(b.score);
+      });
+    },
     build(byName, ctx, triggered) {
-      const tier = triggered.some((n) => byName[n].sev >= 3) ? "High" : "Moderate";
+      // Keep only the low-direction markers in the card.
+      const lowOnly = triggered.filter((n) => /Low/i.test(byName[n].score));
+      const useTrig = lowOnly.length ? lowOnly : triggered;
+      const tier = useTrig.some((n) => byName[n].sev >= 3) ? "High" : "Moderate";
       const read = "Low iron-status markers are a real endurance limiter — oxygen-delivery suffers before haemoglobin moves. Worth addressing before chasing extra training adaptation.";
       const actions = [
         "Add red meat, liver, oysters or sardines a few times per week; pair plant iron (legumes, dark greens) with vitamin C.",
@@ -1137,6 +1259,76 @@ const RECOMMENDATION_RULES = [
       ];
       return {
         id: this.id, tier, tierColor: TIER_META[tier].c, accent: this.accent, icon: this.icon,
+        title: this.title, cats: this.cats,
+        markers: useTrig.map((n) => ({ name: n, b: byName[n] })),
+        read, actions, impact: "Medium", effort: "Low", retest: "8–12 wks",
+      };
+    },
+  },
+  {
+    id: "iron_overload",
+    title: "High ferritin — investigate iron overload",
+    cats: ["Medical"],
+    accent: "#a855f7",
+    icon: ICON.shield,
+    triggers: ["Ferritin", "Iron", "% Transferrin Saturation", "Hemoglobin"],
+    fire(byName) {
+      const f = byName["Ferritin"];
+      return f && f.sev >= 2 && /High/i.test(f.score);
+    },
+    build(byName, ctx, triggered) {
+      const highOnly = triggered.filter((n) => /High/i.test(byName[n].score));
+      const f = byName["Ferritin"];
+      const tier = f && f.sev >= 3 ? "High" : "Moderate";
+      const read = `Ferritin at ${f.value}${f.units ? " " + f.units : ""} is elevated. In an athlete it's usually one of: (a) acute-phase response from recent hard training or low-grade infection, (b) high red-meat/supplement iron intake, or (c) less commonly, a genetic predisposition (HFE/hemochromatosis). Pair with transferrin saturation and HS-CRP next time to disambiguate.`;
+      const actions = [
+        "Re-test ferritin alongside HS-CRP and % transferrin saturation in 4–6 weeks, on a fully rested day (no hard sessions in the prior 48–72h).",
+        "Audit iron sources: stop any iron-containing supplements and note red-meat frequency — easy lever if it's diet-driven.",
+        "If repeat ferritin stays >300 with normal CRP and high saturation, ask your GP about HFE genetic testing.",
+      ];
+      return {
+        id: this.id, tier, tierColor: TIER_META[tier].c, accent: this.accent, icon: this.icon,
+        title: this.title, cats: this.cats,
+        markers: highOnly.map((n) => ({ name: n, b: byName[n] })),
+        read, actions, impact: "Medium", effort: "Low", retest: "4–6 wks",
+      };
+    },
+  },
+  {
+    id: "thyroid",
+    title: "Investigate thyroid function",
+    cats: ["Medical"],
+    accent: "#7dd3fc",
+    icon: ICON.brain,
+    triggers: ["Thyroid Stimulating Hormone (TSH)", "Free T3", "Free T4"],
+    fire(byName) {
+      return this.triggers.some((n) => byName[n] && byName[n].sev >= 2);
+    },
+    build(byName, ctx, triggered) {
+      const tsh = byName["Thyroid Stimulating Hormone (TSH)"];
+      const t3 = byName["Free T3"];
+      const lowTSH = tsh && /Low/i.test(tsh.score);
+      const highTSH = tsh && /High/i.test(tsh.score);
+      const lowT3 = t3 && /Low/i.test(t3.score);
+      let read;
+      if (lowTSH && lowT3) {
+        read = `TSH is low (${tsh.value}) and Free T3 is on the low side (${t3.value}). Together that pattern is unusual — could be HPT-axis suppression from heavy training or early central hypothyroidism. Worth getting a full panel including Free T4 and antibodies.`;
+      } else if (lowTSH) {
+        read = `TSH is low (${tsh.value}). In a high-volume training athlete this often reflects HPT-axis suppression; in others it can signal early hyperthyroidism. Free T4 and antibodies disambiguate.`;
+      } else if (highTSH) {
+        read = `TSH is elevated (${tsh.value}) — most often early hypothyroidism. Confirm with Free T4 and TPO antibodies.`;
+      } else if (lowT3) {
+        read = `Free T3 is borderline low (${t3.value}) but TSH is in range. Common in chronic caloric deficit or long endurance blocks. Reassess after a recovery + refeed week.`;
+      } else {
+        read = `Thyroid markers drifted from optimal — worth a follow-up panel including Free T4 and antibodies.`;
+      }
+      const actions = [
+        "Add Free T4 and TPO/TG antibodies to the next panel — TSH alone isn't enough to act on.",
+        "Mention this pattern to your GP; ask about a fasted morning re-draw on a fully rested day.",
+      ];
+      if (lowT3) actions.push("Make sure you're fuelling enough on training days — low energy availability suppresses T3 conversion.");
+      return {
+        id: this.id, tier: "Monitor", tierColor: TIER_META["Monitor"].c, accent: this.accent, icon: this.icon,
         title: this.title, cats: this.cats,
         markers: triggered.map((n) => ({ name: n, b: byName[n] })),
         read, actions, impact: "Medium", effort: "Low", retest: "8–12 wks",
@@ -1352,6 +1544,9 @@ function ImpactEffortMap({ recs }) {
 }
 
 function RecCard({ r }) {
+  // If every triggering marker is from a prior test cycle, surface that
+  // prominently — these recs are advisory until a fresh re-test confirms.
+  const allStale = r.markers.length > 0 && r.markers.every((m) => m.b && m.b.stale);
   return html`<div id=${"rec-" + r.id} className="rounded-2xl overflow-hidden scroll-mt-4"
     style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + r.accent }}>
     <div className="p-5">
@@ -1368,6 +1563,11 @@ function RecCard({ r }) {
           <h3 className="text-base font-semibold" style=${{ color: C.text, letterSpacing: "-0.01em" }}>${r.title}</h3>
         </div>
       </div>
+      ${allStale ? html`<div className="rounded-lg px-3 py-2 mb-3 text-[11px] flex items-center gap-2"
+        style=${{ background: C.amber + "12", border: "1px solid " + C.amber + "44", color: C.amber }}>
+        <span style=${{ fontWeight: 700 }}>⚠ Based on previous test cycle</span>
+        <span style=${{ color: C.muted }}>No new reading for these markers — re-test to confirm</span>
+      </div>` : null}
       <div className="flex flex-wrap gap-2 mb-4">${r.markers.map((m) => html`<${RecChip} key=${m.name} m=${m} />`)}</div>
       <div className="rounded-xl p-3.5 mb-4" style=${{ background: C.bg, border: "1px solid " + C.border }}>
         <div className="text-[10px] font-semibold tracking-wider mb-1.5" style=${{ color: r.accent }}>ANALYSIS</div>
