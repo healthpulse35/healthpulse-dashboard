@@ -575,11 +575,16 @@ function parseBio(b, viewMode) {
   let xMin, xMax;
   if (series.length <= 1) { xMin = -3; xMax = 1; }
   else { xMin = -0.3; xMax = xMin + (series.length - 1 - xMin) / 0.75; }
+  const latestDate = hist.length ? hist[hist.length - 1].test_date : null;
+  const latestLabel = latestDate
+    ? (() => { const d = parseISO(latestDate); return d.getDate() + " " + BIO_MON_SHORT[d.getMonth()] + " " + String(d.getFullYear()).slice(2); })()
+    : null;
   return {
     name: b.name, category: b.category, units: b.units,
     value, score, sev, color, ranges, bandIdx,
     series, xDomain: [xMin, xMax], yDomain: [domLo, domHi], xticks, labelByX,
     flagged: sev >= 2,
+    latestDate, latestLabel,
     whatItMeasures: b.what_it_measures,
     impactHigh: b.impact_high,
     impactLow: b.impact_low,
@@ -719,7 +724,10 @@ function MiniRange({ b }) {
 function GroupMiniCard({ b, onClick }) {
   return html`<button onClick=${onClick} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10 }} className="text-left p-2.5 w-full transition-colors">
     <div className="min-w-0">
-      <div className="text-[12px] font-semibold truncate" style=${{ color: C.text }}>${b.name}</div>
+      <div className="flex items-center gap-1.5">
+        <div className="text-[12px] font-semibold truncate" style=${{ color: C.text }}>${b.name}</div>
+        ${b.stale ? html`<span title=${"Last tested " + (b.latestLabel || "earlier")} style=${{ color: C.amber, border: "1px solid " + C.amber + "55", background: C.amber + "12", borderRadius: 4 }} className="text-[8px] font-semibold px-1 shrink-0">OLD</span>` : null}
+      </div>
       <div className="flex items-baseline justify-between gap-2 mt-1">
         <div className="text-[13px] font-bold leading-none" style=${{ color: C.text }}>${b.value != null ? b.value : "—"}<span className="text-[9px] font-normal" style=${{ color: C.muted }}> ${b.units || ""}</span></div>
         <span style=${{ color: b.color, border: "1px solid " + b.color, borderRadius: 999 }} className="text-[9px] font-semibold px-1.5 py-0.5">${b.score}</span>
@@ -762,6 +770,10 @@ function MarkerDetail({ b }) {
         <span style=${{ color: b.color, border: "1px solid " + b.color, borderRadius: 999 }} className="text-[10px] font-semibold px-2 py-0.5 inline-block mt-1">${b.score}</span>
       </div>
     </div>
+    ${b.latestLabel ? html`<div className="mt-2 flex items-center gap-2 text-[11px]" style=${{ color: C.muted }}>
+      <span>Last tested ${b.latestLabel}</span>
+      ${b.stale ? html`<span style=${{ color: C.amber, background: C.amber + "12", border: "1px solid " + C.amber + "55", borderRadius: 999 }} className="px-2 py-0.5 text-[10px] font-semibold">Previous test cycle — no new reading</span>` : null}
+    </div>` : null}
     <${BioTrend} b=${b} />
     ${b.flagged && b.recommendation ? html`<div style=${{ background: "rgba(251,191,36,0.07)", border: "1px solid rgba(251,191,36,0.25)", borderRadius: 8 }} className="mt-4 p-3">
       <div style=${{ color: C.amber }} className="text-[11px] font-semibold mb-1">How to improve</div>
@@ -825,8 +837,21 @@ function BiomarkersView() {
     items: lmap[cat].slice().sort((a, b) => b.sev - a.sev || a.name.localeCompare(b.name)),
   }));
 
-  const allDates = parsed.flatMap((p) => p.series.map((s) => s.label));
-  const latestStr = allDates.length ? allDates[allDates.length - 1] : "—";
+  // Dataset-wide latest test date — used to flag individual markers whose
+  // most recent reading lags behind the freshest in the panel.
+  const allIso = parsed.map((p) => p.latestDate).filter(Boolean);
+  const datasetLatestIso = allIso.length ? allIso.reduce((a, b) => (a > b ? a : b)) : null;
+  const latestStr = datasetLatestIso
+    ? (() => { const d = parseISO(datasetLatestIso); return d.getDate() + " " + BIO_MON_SHORT[d.getMonth()] + " " + String(d.getFullYear()).slice(2); })()
+    : "—";
+  // Mark a reading "stale" when it's more than 60 days older than the dataset
+  // latest (i.e. one full test-cycle behind).
+  function isStale(p) {
+    if (!p.latestDate || !datasetLatestIso) return false;
+    const ms = parseISO(datasetLatestIso).getTime() - parseISO(p.latestDate).getTime();
+    return ms > 60 * 86400000;
+  }
+  parsed.forEach((p) => { p.stale = isStale(p); });
 
   const radarData = perfGroups.map((g) => ({
     category: g.name,
@@ -1229,6 +1254,7 @@ function RecChip({ m }) {
     <span className="text-xs" style=${{ color: C.text }}>${m.name}</span>
     <span className="text-xs" style=${{ color: C.muted }}>${m.b.value != null ? m.b.value : "—"}${m.b.units ? " " + m.b.units : ""}</span>
     <span className="text-xs font-medium" style=${{ color: sevMeta.c }}>${sevMeta.label}</span>
+    ${m.b.stale && m.b.latestLabel ? html`<span title="From the previous test cycle — no new reading on the latest panel" style=${{ color: C.amber, background: C.amber + "12", border: "1px solid " + C.amber + "55", borderRadius: 4 }} className="text-[9px] font-semibold px-1">${m.b.latestLabel}</span>` : null}
   </div>`;
 }
 
@@ -1382,6 +1408,13 @@ function RecommendationsView() {
 
   // Optimized scoring drives the recs — longevity / athlete cutoffs.
   const parsed = data.biomarkers.map((b) => parseBio(b, "Optimized"));
+  // Flag markers whose latest reading lags more than 60 days behind the
+  // dataset's freshest test date, so the chips can show the prior cycle.
+  const datasetLatest = parsed.map((p) => p.latestDate).filter(Boolean).reduce((a, b) => (a && a > b ? a : b), null);
+  if (datasetLatest) {
+    const cutoffMs = parseISO(datasetLatest).getTime() - 60 * 86400000;
+    parsed.forEach((p) => { p.stale = p.latestDate ? parseISO(p.latestDate).getTime() < cutoffMs : false; });
+  }
   const ctx = buildTrainContext(DAYS);
   const { recs, byName } = buildRecommendations(parsed, ctx);
 
