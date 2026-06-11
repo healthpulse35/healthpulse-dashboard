@@ -2853,16 +2853,9 @@ function App() {
           <//>
           <div className="flex flex-wrap gap-3 mt-3 text-[11px]">
             ${zoneName.map((n, i) => {
-              // Standard Garmin / % of Max-HR zone model. Edges:
-              // Z1 <60% · Z2 60-70% · Z3 70-80% · Z4 80-90% · Z5 ≥90%.
-              const pct = [[0, 60], [60, 70], [70, 80], [80, 90], [90, 100]][i];
-              const range = RAW.maxHr
-                ? (i === 0
-                    ? `< ${Math.round(RAW.maxHr * pct[1] / 100)} bpm`
-                    : i === 4
-                      ? `≥ ${Math.round(RAW.maxHr * pct[0] / 100)} bpm`
-                      : `${Math.round(RAW.maxHr * pct[0] / 100)}–${Math.round(RAW.maxHr * pct[1] / 100)} bpm`)
-                : `${pct[0]}–${pct[1]}% max HR`;
+              // Kevin's actual HR zones (matches his Strava zone config),
+              // not the generic %-of-max-HR model.
+              const range = ["< 135 bpm", "135–155 bpm", "155–170 bpm", "170–179 bpm", "≥ 180 bpm"][i];
               return html`<div key=${n} className="flex flex-col">
                 <span style=${{ color: C.text, fontWeight: 600 }}><span style=${{ color: zoneColor[i] }}>■</span> ${n}</span>
                 <span style=${{ color: C.text, fontSize: 10, opacity: 0.7 }} className="ml-3">${range}</span>
