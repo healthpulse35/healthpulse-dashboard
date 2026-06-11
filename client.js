@@ -296,20 +296,25 @@ function saveRaces(races) {
 }
 
 // ---------- ui primitives ----------
-const Card = ({ title, sub, right, source, children }) =>
-  html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-3 sm:p-5 mb-4">
-    <div className="flex flex-wrap items-start justify-between mb-4 gap-3">
+// On mobile the sub-description is collapsed by default — tapping the
+// title toggles it (saves vertical space). On sm+ it's always visible.
+const Card = ({ title, sub, right, source, children }) => {
+  const [showSub, setShowSub] = useState(false);
+  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-2.5 sm:p-5 mb-4">
+    <div className="flex flex-wrap items-start justify-between mb-2 sm:mb-4 gap-3">
       <div style=${{ flex: "1 1 230px", minWidth: 0 }}>
-        <div
+        <button
+          onClick=${() => sub && setShowSub((s) => !s)}
           title=${source || undefined}
-          style=${{ color: C.muted, letterSpacing: "0.13em", cursor: source ? "help" : "default" }}
-          className="text-xs font-semibold uppercase inline-flex items-center gap-1.5">${title}${source ? html`<span style=${{ color: C.border, fontSize: 10 }}>ⓘ</span>` : null}</div>
-        ${sub ? html`<div style=${{ color: C.muted }} className="text-xs mt-1">${sub}</div>` : null}
+          style=${{ color: C.muted, letterSpacing: "0.13em", cursor: sub || source ? "pointer" : "default", background: "none", border: "none", padding: 0, textAlign: "left" }}
+          className="text-xs font-semibold uppercase inline-flex items-center gap-1.5">${title}${sub ? html`<span className="sm:hidden" style=${{ color: C.border, fontSize: 9 }}>${showSub ? "▲" : "▼"}</span>` : null}${source ? html`<span style=${{ color: C.border, fontSize: 10 }}>ⓘ</span>` : null}</button>
+        ${sub ? html`<div style=${{ color: C.muted }} className=${"text-xs mt-1 " + (showSub ? "" : "hidden sm:block")}>${sub}</div>` : null}
       </div>
       ${right ? html`<div className="ml-auto">${right}</div>` : null}
     </div>
     ${children}
   </div>`;
+};
 
 const Pills = ({ options, value, onChange }) =>
   html`<div className="flex flex-wrap gap-1.5">
@@ -2693,7 +2698,7 @@ function App() {
           </select>
         </div>`}>
         <${ResponsiveContainer} width="100%" height=${300}>
-          <${ComposedChart} data=${view} syncId="ff" margin=${{ top: 16, right: 12, left: -12, bottom: 0 }}>
+          <${ComposedChart} data=${view} syncId="ff" margin=${{ top: 16, right: 0, left: -12, bottom: 0 }}>
             <defs>
               <linearGradient id="gFit" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor=${C.cyan} stopOpacity=${0.32} />
@@ -2713,7 +2718,7 @@ function App() {
           <//>
         <//>
         <${ResponsiveContainer} width="100%" height=${150}>
-          <${ComposedChart} data=${view} syncId="ff" margin=${{ top: 4, right: 12, left: -12, bottom: 0 }}>
+          <${ComposedChart} data=${view} syncId="ff" margin=${{ top: 4, right: 0, left: -12, bottom: 0 }}>
             <defs>
               <linearGradient id="gFormBand" x1="0" y1="0" x2="0" y2="1">
                 ${formGradStops.map((s, i) => html`<stop key=${i} offset=${s.offset + "%"} stopColor=${s.color} />`)}
