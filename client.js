@@ -2682,7 +2682,10 @@ function App() {
         <span><span style=${{ color: C.amber }}>●</span> Watch / suboptimal</span>
         <span><span style=${{ color: C.red }}>●</span> Needs attention</span>
       </div>
-      <div className="sm:hidden mb-4">
+      <!-- Mobile range selector: sticks to the top of the viewport while
+           scrolling so the range is always one tap away. -->
+      <div className="sm:hidden sticky top-0 z-20 -mx-2 px-2 py-2 mb-3 flex justify-center"
+        style=${{ background: C.bg, borderBottom: "1px solid " + C.border }}>
         <${Pills} options=${["1M", "3M", "6M", "1Y", "2Y", "All"]} value=${range} onChange=${onRange} />
       </div>
 
