@@ -1855,8 +1855,8 @@ function CalZoneBar({ zones, height = 8 }) {
   </div>`;
 }
 
-function CalMetric({ label, value, color }) {
-  return html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 10, padding: "6px 11px", minWidth: 62 }}>
+function CalMetric({ label, value, color, bg }) {
+  return html`<div style=${{ background: bg || C.card, border: "1px solid " + C.border, borderRadius: 10, padding: "6px 11px", minWidth: 62 }}>
     <div style=${{ fontSize: 9.5, letterSpacing: 0.8, textTransform: "uppercase", color: C.muted, fontWeight: 600 }}>${label}</div>
     <div style=${{ fontSize: 17, fontWeight: 700, color: color || C.text, lineHeight: 1.1 }}>${value}</div>
   </div>`;
@@ -1984,7 +1984,7 @@ function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
         const rest = day.workouts.length === 0;
         return html`<div key=${day.date} style=${{ background: isToday ? C.cyan + "0e" : C.card, border: `1px solid ${isToday ? C.cyan + "55" : C.border}`, borderRadius: 12, padding: rest ? "8px 10px" : 10 }}>
           <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: rest ? 0 : 8 }}>
-            <span style=${{ fontSize: 11.5, fontWeight: 700, color: isToday ? C.cyan : C.muted }}>${calFmtDay(day.date)}</span>
+            <span style=${{ fontSize: 12, fontWeight: 700, color: isToday ? C.cyan : C.text }}>${calFmtDay(day.date)}</span>
             ${isToday ? html`<span style=${{ fontSize: 9, fontWeight: 700, color: C.bg, background: C.cyan, padding: "1px 6px", borderRadius: 999 }}>TODAY</span>` : null}
             <span style=${{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10 }}>
               ${rest ? html`<span style=${{ display: "inline-flex", alignItems: "center", gap: 4, color: C.muted, fontSize: 11 }}><${IconRest} size=${12} /> Rest</span>` : null}
@@ -2016,7 +2016,31 @@ function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
     </div>
   </div>`;
 
-  return html`<div style=${{ background: C.card, border: `1px solid ${isCurrent ? C.cyan + "55" : C.border}`, borderRadius: 16, padding: isMobile ? 12 : 16, marginBottom: 16 }}>
+  // Mobile: flatten the week box. A prominent header band marks the week
+  // boundary, the summary (metrics / targets / zones) lives in one compact
+  // card, and the day cards sit directly on the page background so each
+  // day reads as a distinct unit.
+  if (isMobile) {
+    return html`<div style=${{ marginBottom: 28 }}>
+      <div style=${{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 12, marginBottom: 8, background: isCurrent ? C.cyan + "18" : C.grid, border: `1px solid ${isCurrent ? C.cyan + "66" : C.border}` }}>
+        <span style=${{ fontSize: 15, fontWeight: 800, color: isCurrent ? C.cyan : C.text }}>Week ${wk.num}</span>
+        <span style=${{ fontSize: 12, color: C.muted, fontWeight: 600 }}>${calFmtRange(wk.start, wk.end)}</span>
+        ${isCurrent ? html`<span style=${{ marginLeft: "auto", fontSize: 10, fontWeight: 700, color: C.bg, background: C.cyan, padding: "2px 7px", borderRadius: 999 }}>THIS WEEK</span>` : null}
+      </div>
+      <div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14, padding: 12, marginBottom: 8 }}>
+        <div style=${{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 7, marginBottom: 10 }}>
+          <${CalMetric} label="Fitness" value=${wk.fitness ?? "–"} color=${C.cyan} bg=${C.bg} />
+          <${CalMetric} label="Fatigue" value=${wk.fatigue ?? "–"} color=${C.violet} bg=${C.bg} />
+          <${CalMetric} label="Form" value=${wk.form ?? "–"} color=${formColor} bg=${C.bg} />
+          <${CalMetric} label="Ramp" value=${wk.ramp ?? "–"} color=${C.muted} bg=${C.bg} />
+        </div>
+        <div style=${{ marginBottom: 12 }}>${targetsPanel}</div>
+        ${zonesBlock}
+      </div>
+      ${scheduleGrid}
+    </div>`;
+  }
+  return html`<div style=${{ background: C.card, border: `1px solid ${isCurrent ? C.cyan + "55" : C.border}`, borderRadius: 16, padding: 16, marginBottom: 16 }}>
     <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, marginBottom: 14 }}>
       <div style=${{ flexShrink: 0 }}>
         <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -2025,17 +2049,14 @@ function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
         </div>
         <div style=${{ fontSize: 12, color: C.muted }}>${calFmtRange(wk.start, wk.end)}</div>
       </div>
-      ${isMobile ? null : html`<div style=${{ flex: "1 1 280px", minWidth: 260, maxWidth: 360 }}>${targetsPanel}</div>`}
-      <div style=${isMobile
-        ? { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 7, width: "100%" }
-        : { display: "flex", flexWrap: "wrap", gap: 7 }}>
+      <div style=${{ flex: "1 1 280px", minWidth: 260, maxWidth: 360 }}>${targetsPanel}</div>
+      <div style=${{ display: "flex", flexWrap: "wrap", gap: 7 }}>
         <${CalMetric} label="Fitness" value=${wk.fitness ?? "–"} color=${C.cyan} />
         <${CalMetric} label="Fatigue" value=${wk.fatigue ?? "–"} color=${C.violet} />
         <${CalMetric} label="Form" value=${wk.form ?? "–"} color=${formColor} />
         <${CalMetric} label="Ramp" value=${wk.ramp ?? "–"} color=${C.muted} />
       </div>
     </div>
-    ${isMobile ? html`<div style=${{ marginBottom: 12 }}>${targetsPanel}</div>` : null}
     <div style=${{ marginBottom: 14 }}>${zonesBlock}</div>
     ${scheduleGrid}
   </div>`;
