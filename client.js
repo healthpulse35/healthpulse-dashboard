@@ -298,15 +298,15 @@ function saveRaces(races) {
 // ---------- ui primitives ----------
 const Card = ({ title, sub, right, source, children }) =>
   html`<div style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 14 }} className="p-3 sm:p-5 mb-4">
-    <div className="flex items-start justify-between mb-4 gap-3">
-      <div>
+    <div className="flex flex-wrap items-start justify-between mb-4 gap-3">
+      <div style=${{ flex: "1 1 230px", minWidth: 0 }}>
         <div
           title=${source || undefined}
           style=${{ color: C.muted, letterSpacing: "0.13em", cursor: source ? "help" : "default" }}
           className="text-xs font-semibold uppercase inline-flex items-center gap-1.5">${title}${source ? html`<span style=${{ color: C.border, fontSize: 10 }}>ⓘ</span>` : null}</div>
         ${sub ? html`<div style=${{ color: C.muted }} className="text-xs mt-1">${sub}</div>` : null}
       </div>
-      ${right}
+      ${right ? html`<div className="ml-auto">${right}</div>` : null}
     </div>
     ${children}
   </div>`;
@@ -1975,8 +1975,28 @@ function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
     </div>
   </div>`;
 
-  const scheduleGrid = html`<div style=${{ overflowX: isMobile ? "auto" : "visible", margin: "0 -2px", paddingBottom: 4 }}>
-    <div style=${{ display: "grid", gridTemplateColumns: isMobile ? "repeat(7, minmax(150px, 1fr))" : "repeat(7, minmax(0, 1fr))", gap: isMobile ? 8 : 7 }}>
+  // Mobile: vertical agenda list (one full-width row per day, rest days
+  // collapsed to a slim row) — no sideways scrolling. Desktop: 7-col grid.
+  const scheduleGrid = isMobile
+    ? html`<div style=${{ display: "flex", flexDirection: "column", gap: 8 }}>
+      ${dayList.map((day) => {
+        const isToday = day.date === todayIso;
+        const rest = day.workouts.length === 0;
+        return html`<div key=${day.date} style=${{ background: isToday ? C.cyan + "0e" : C.card, border: `1px solid ${isToday ? C.cyan + "55" : C.border}`, borderRadius: 12, padding: rest ? "8px 10px" : 10 }}>
+          <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: rest ? 0 : 8 }}>
+            <span style=${{ fontSize: 11.5, fontWeight: 700, color: isToday ? C.cyan : C.muted }}>${calFmtDay(day.date)}</span>
+            ${isToday ? html`<span style=${{ fontSize: 9, fontWeight: 700, color: C.bg, background: C.cyan, padding: "1px 6px", borderRadius: 999 }}>TODAY</span>` : null}
+            <span style=${{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10 }}>
+              ${rest ? html`<span style=${{ display: "inline-flex", alignItems: "center", gap: 4, color: C.muted, fontSize: 11 }}><${IconRest} size=${12} /> Rest</span>` : null}
+              ${day.hrv ? html`<span title="HRV" style=${{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 10, color: "#f472b6" }}>♥ ${day.hrv}</span>` : null}
+            </span>
+          </div>
+          ${day.workouts.map((w) => html`<${CalCard} key=${w.id} w=${w} date=${day.date} onClick=${onSelect} />`)}
+        </div>`;
+      })}
+    </div>`
+    : html`<div style=${{ margin: "0 -2px", paddingBottom: 4 }}>
+    <div style=${{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 7 }}>
       ${dayList.map((day) => {
         const isToday = day.date === todayIso;
         return html`<div key=${day.date} style=${{ background: isToday ? C.cyan + "0e" : C.card, border: `1px solid ${isToday ? C.cyan + "55" : C.border}`, borderRadius: 12, padding: 8, minHeight: 80 }}>
@@ -1992,7 +2012,7 @@ function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
     </div>
   </div>`;
 
-  return html`<div style=${{ background: C.card, border: `1px solid ${isCurrent ? C.cyan + "55" : C.border}`, borderRadius: 16, padding: 16, marginBottom: 16 }}>
+  return html`<div style=${{ background: C.card, border: `1px solid ${isCurrent ? C.cyan + "55" : C.border}`, borderRadius: 16, padding: isMobile ? 12 : 16, marginBottom: 16 }}>
     <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, marginBottom: 14 }}>
       <div style=${{ flexShrink: 0 }}>
         <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -2002,7 +2022,9 @@ function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
         <div style=${{ fontSize: 12, color: C.muted }}>${calFmtRange(wk.start, wk.end)}</div>
       </div>
       ${isMobile ? null : html`<div style=${{ flex: "1 1 280px", minWidth: 260, maxWidth: 360 }}>${targetsPanel}</div>`}
-      <div style=${{ display: "flex", flexWrap: "wrap", gap: 7, marginLeft: isMobile ? "auto" : 0 }}>
+      <div style=${isMobile
+        ? { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 7, width: "100%" }
+        : { display: "flex", flexWrap: "wrap", gap: 7 }}>
         <${CalMetric} label="Fitness" value=${wk.fitness ?? "–"} color=${C.cyan} />
         <${CalMetric} label="Fatigue" value=${wk.fatigue ?? "–"} color=${C.violet} />
         <${CalMetric} label="Form" value=${wk.form ?? "–"} color=${formColor} />
@@ -2015,7 +2037,7 @@ function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
   </div>`;
 }
 
-function CalDrawer({ sel, open, onClose }) {
+function CalDrawer({ sel, open, onClose, isMobile }) {
   if (!sel) return null;
   const { w, date } = sel;
   const cls = calClassify(w);
@@ -2030,9 +2052,15 @@ function CalDrawer({ sel, open, onClose }) {
     ...(!planned && w.avgHr ? [{ l: "Avg HR", v: `${w.avgHr} bpm`, Ic: IconActivity }] : []),
     ...(w.pace ? [{ l: "Pace", v: w.pace, Ic: IconActivity }] : []),
   ];
+  // Mobile: bottom sheet (slides up, full width, capped height). Desktop:
+  // right-hand side drawer.
+  const panelStyle = isMobile
+    ? { position: "absolute", left: 0, right: 0, bottom: 0, maxHeight: "88%", background: C.card, borderTop: "1px solid " + C.border, borderRadius: "16px 16px 0 0", overflowY: "auto", transform: open ? "translateY(0)" : "translateY(100%)", transition: "transform .22s ease", color: C.text }
+    : { position: "absolute", top: 0, right: 0, height: "100%", width: "min(440px, 92vw)", background: C.card, borderLeft: "1px solid " + C.border, overflowY: "auto", transform: open ? "translateX(0)" : "translateX(100%)", transition: "transform .22s ease", color: C.text };
   return html`<div onClick=${onClose} style=${{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(2,6,14,0.55)", opacity: open ? 1 : 0, transition: "opacity .2s" }}>
-    <div onClick=${(e) => e.stopPropagation()} style=${{ position: "absolute", top: 0, right: 0, height: "100%", width: "min(440px, 92vw)", background: C.card, borderLeft: "1px solid " + C.border, overflowY: "auto", transform: open ? "translateX(0)" : "translateX(100%)", transition: "transform .22s ease", color: C.text }}>
-      <div style=${{ padding: 18, borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.card, zIndex: 1 }}>
+    <div onClick=${(e) => e.stopPropagation()} style=${panelStyle}>
+      ${isMobile ? html`<div style=${{ width: 36, height: 4, borderRadius: 999, background: C.border, margin: "8px auto 0" }} />` : null}
+      <div style=${{ padding: isMobile ? 14 : 18, borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.card, zIndex: 1 }}>
         <div style=${{ display: "flex", alignItems: "flex-start", gap: 10 }}>
           <div style=${{ width: 34, height: 34, borderRadius: 9, background: tc + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><${Icon} size=${17} color=${tc} /></div>
           <div style=${{ flex: 1 }}>
@@ -2050,7 +2078,7 @@ function CalDrawer({ sel, open, onClose }) {
           </span>` : null}
         </div>
       </div>
-      <div style=${{ padding: 18 }}>
+      <div style=${{ padding: isMobile ? 14 : 18 }}>
         <div style=${{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8, marginBottom: 18 }}>
           ${stats.map((s) => html`<div key=${s.l} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10, padding: "9px 11px" }}>
             <div style=${{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, color: C.muted, marginBottom: 2 }}><${s.Ic} size=${11} /> ${s.l}</div>
@@ -2183,7 +2211,7 @@ function CalendarView() {
     ${current.map(renderWk)}
     ${future.map(renderWk)}
 
-    <${CalDrawer} sel=${sel} open=${drawerOpen} onClose=${closeDrawer} />
+    <${CalDrawer} sel=${sel} open=${drawerOpen} onClose=${closeDrawer} isMobile=${isMobile} />
   </div>`;
 }
 
@@ -2540,17 +2568,17 @@ function App() {
 
   // Tab bar — always rendered; the Training-only floating range selector
   // is conditioned on the active tab so it doesn't show on Biomarkers.
-  const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4 flex items-center justify-between" style=${{ borderBottom: "1px solid " + C.border }}>
-    <div>
+  const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4 flex flex-wrap items-center justify-between" style=${{ borderBottom: "1px solid " + C.border }}>
+    <div className="flex max-w-full overflow-x-auto" style=${{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
       ${["Training", "Calendar", "Biomarkers", "Recommendations"].map((t) => {
         const on = t === tab;
         return html`<button key=${t} onClick=${() => setTab(t)}
-          style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1, background: "transparent" }}
-          className="px-4 py-2.5 text-sm font-semibold transition-colors">${t}</button>`;
+          style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1, background: "transparent", whiteSpace: "nowrap", flexShrink: 0 }}
+          className="px-3 sm:px-4 py-2.5 text-sm font-semibold transition-colors">${t}</button>`;
       })}
     </div>
-    <div className="flex items-center gap-2 mr-1 mb-2">
-      ${syncMsg ? html`<span style=${{ fontSize: 11, color: syncState === "error" ? C.red : C.green, fontWeight: 500 }}>${syncMsg}</span>` : null}
+    <div className="flex items-center gap-2 mr-1 mb-2 ml-auto">
+      ${syncMsg ? html`<span style=${{ fontSize: 11, color: syncState === "error" ? C.red : C.green, fontWeight: 500, maxWidth: 190 }} className="truncate">${syncMsg}</span>` : null}
       <button onClick=${triggerSync}
         disabled=${syncState === "dispatching"}
         title="Re-sync all sources (Strava, intervals.icu, sheets)"
@@ -2573,7 +2601,7 @@ function App() {
         style=${{ background: "transparent", color: C.muted, border: "1px solid " + C.border, borderRadius: 999 }}
         className="px-3 py-1.5 text-xs font-semibold transition-colors flex items-center gap-1.5">
         <span style=${{ fontSize: 14 }}>${theme === "dark" ? "☀" : "☾"}</span>
-        <span>${theme === "dark" ? "Light" : "Dark"}</span>
+        <span className="hidden sm:inline">${theme === "dark" ? "Light" : "Dark"}</span>
       </button>
     </div>
   </div>`;
