@@ -1991,7 +1991,11 @@ function CalWeekBlock({ wk, todayIso, isMobile, onSelect }) {
               ${day.hrv ? html`<span title="HRV" style=${{ display: "inline-flex", alignItems: "center", gap: 2, fontSize: 10, color: "#f472b6" }}>♥ ${day.hrv}</span>` : null}
             </span>
           </div>
-          ${day.workouts.map((w) => html`<${CalCard} key=${w.id} w=${w} date=${day.date} onClick=${onSelect} />`)}
+          ${day.workouts.length > 1
+            ? html`<div style=${{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", columnGap: 7 }}>
+                ${day.workouts.map((w) => html`<${CalCard} key=${w.id} w=${w} date=${day.date} onClick=${onSelect} />`)}
+              </div>`
+            : day.workouts.map((w) => html`<${CalCard} key=${w.id} w=${w} date=${day.date} onClick=${onSelect} />`)}
         </div>`;
       })}
     </div>`
