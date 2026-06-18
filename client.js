@@ -2472,6 +2472,23 @@ function App() {
     return [Math.max(0, Math.floor((lo - pad) / 5) * 5), Math.ceil((hi + pad) / 5) * 5];
   }, [view]);
 
+  // Independent y-domains for the default (no-overlay) dual-axis view.
+  // Fitness (CTL) moves slowly in a narrow band; fatigue (ATL) swings
+  // wide. On a shared axis the fitness line looks flat — its own axis,
+  // scaled tight to just its range, restores the vertical detail.
+  const domainFor = (key) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const d of view) {
+      const v = d[key];
+      if (v != null) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    }
+    if (lo === Infinity) return ["auto", "auto"];
+    const pad = Math.max(2, (hi - lo) * 0.08);
+    return [Math.max(0, Math.floor((lo - pad) / 5) * 5), Math.ceil((hi + pad) / 5) * 5];
+  };
+  const fitDomain = useMemo(() => domainFor("fitness"), [view]);
+  const fatDomain = useMemo(() => domainFor("fatigue"), [view]);
+
   const efSeries = AE_SESSIONS.map((s) => ({ label: fmtDate(s.date), session: s.ef, trend: s.trend, date: s.date }));
   const efDomain = (() => {
     const v = efSeries.flatMap((x) => [x.session, x.trend]).filter((x) => x != null);
@@ -2690,7 +2707,7 @@ function App() {
       </div>
 
       <!-- Fitness/Fatigue + Form: one card, stacked charts, synced hover cursor -->
-      <${Card} title="Fitness, Fatigue & Form" sub="Blue = fitness (CTL, 42-day EWMA). Purple = fatigue (ATL, 7-day EWMA). White (lower) = form (CTL − ATL)."
+      <${Card} title="Fitness, Fatigue & Form" sub="Blue = fitness (CTL, 42-day EWMA, left axis). Purple = fatigue (ATL, 7-day EWMA, right axis). Each on its own scale so both show detail. White (lower) = form (CTL − ATL)."
         source="Source: intervals.icu wellness (Garmin Connect partnership). Form is derived (CTL − ATL). Days without a wellness row fall back to a local EWMA over Strava training-load."
         right=${html`<div className="flex items-center gap-2">
           <span style=${{ color: C.muted }} className="text-[11px]">Overlay</span>
@@ -2710,13 +2727,20 @@ function App() {
             </defs>
             <${CartesianGrid} stroke=${C.grid} vertical=${false} />
             <${XAxis} dataKey="label" tick=${axis} tickLine=${false} axisLine=${{ stroke: C.border }} minTickGap=${48} />
-            <${YAxis} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} domain=${ffDomain} allowDataOverflow=${true} tick=${axis} tickLine=${false} axisLine=${false} width=${38} />
-            ${FIT_OVERLAYS[fitOverlay] ? html`<${YAxis} yAxisId="right" orientation="right" tick=${{ ...axis, fill: FIT_OVERLAYS[fitOverlay].color }} tickLine=${false} axisLine=${false} width=${42} />` : null}
+            <!-- Left axis = fitness. When no overlay is selected, fatigue
+                 gets its own right axis (scaled tight to its own range) so
+                 the slow-moving fitness line keeps full vertical detail.
+                 With an overlay active, fitness + fatigue share the left
+                 axis and the overlay takes the right. -->
+            <${YAxis} yAxisId="fit" domain=${FIT_OVERLAYS[fitOverlay] ? ffDomain : fitDomain} allowDataOverflow=${true} tick=${{ ...axis, fill: C.cyan }} tickLine=${false} axisLine=${false} width=${38} />
+            ${FIT_OVERLAYS[fitOverlay]
+              ? html`<${YAxis} yAxisId="right" orientation="right" tick=${{ ...axis, fill: FIT_OVERLAYS[fitOverlay].color }} tickLine=${false} axisLine=${false} width=${42} />`
+              : html`<${YAxis} yAxisId="fat" orientation="right" domain=${fatDomain} allowDataOverflow=${true} tick=${{ ...axis, fill: C.violet }} tickLine=${false} axisLine=${false} width=${34} />`}
             <${Tooltip} content=${h(TT)} />
-            ${yearLines(view, FIT_OVERLAYS[fitOverlay] ? "left" : undefined)}
-            ${raceLines(view, races, FIT_OVERLAYS[fitOverlay] ? "left" : undefined)}
-            <${Area} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" baseValue=${typeof ffDomain[0] === "number" ? ffDomain[0] : "dataMin"} dot=${false} />
-            <${Line} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "left" : undefined} type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
+            ${yearLines(view, "fit")}
+            ${raceLines(view, races, "fit")}
+            <${Area} yAxisId="fit" type="monotone" dataKey="fitness" name="Fitness" stroke=${C.cyan} strokeWidth=${2} fill="url(#gFit)" baseValue=${typeof (FIT_OVERLAYS[fitOverlay] ? ffDomain : fitDomain)[0] === "number" ? (FIT_OVERLAYS[fitOverlay] ? ffDomain : fitDomain)[0] : "dataMin"} dot=${false} />
+            <${Line} yAxisId=${FIT_OVERLAYS[fitOverlay] ? "fit" : "fat"} type="monotone" dataKey="fatigue" name="Fatigue" stroke=${C.violet} strokeWidth=${1.6} dot=${false} />
             ${FIT_OVERLAYS[fitOverlay] ? html`<${Line} yAxisId="right" type="monotone" dataKey=${FIT_OVERLAYS[fitOverlay].key} name=${fitOverlay} stroke=${FIT_OVERLAYS[fitOverlay].color} strokeWidth=${1.6} strokeDasharray="4 3" dot=${false} connectNulls=${true} isAnimationActive=${false} />` : null}
           <//>
         <//>
