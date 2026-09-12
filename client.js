@@ -2840,9 +2840,11 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, lastWeekA
     onSaved(obj);
     setSaveMsg({ ok: true, text: "Saved on this device · syncing…" });
     try {
+      // No content-type header on purpose: with it, the browser sends a
+      // CORS preflight; without it this is a "simple request" that goes
+      // straight through. The server's req.json() parses the body anyway.
       const r = await fetch(LP_API + encodeURIComponent(lpToken()), {
         method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({ isoWeek: obj.isoWeek, payload: obj }),
       });
       if (!r.ok) throw new Error("HTTP " + r.status);
