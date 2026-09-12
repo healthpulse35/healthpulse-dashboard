@@ -101,6 +101,14 @@ const DAYS = RAW.days.map((d) => {
       Bike: { load: d.perSport.Bike.load, dist: d.perSport.Bike.dist_km, dur: d.perSport.Bike.dur_h * 60 },
       Swim: { load: d.perSport.Swim.load, dist: d.perSport.Swim.dist_km, dur: d.perSport.Swim.dur_h * 60 },
       Strength: { load: d.perSport.Strength.load, dist: d.perSport.Strength.dist_km, dur: d.perSport.Strength.dur_h * 60 },
+      // Erg (rowing / ski erg / elliptical…) + Other are newer server keys —
+      // guard so a stale cached payload without them still renders.
+      Erg: d.perSport.Erg
+        ? { load: d.perSport.Erg.load, dist: d.perSport.Erg.dist_km, dur: d.perSport.Erg.dur_h * 60 }
+        : { load: 0, dist: 0, dur: 0 },
+      Other: d.perSport.Other
+        ? { load: d.perSport.Other.load, dist: d.perSport.Other.dist_km, dur: d.perSport.Other.dur_h * 60 }
+        : { load: 0, dist: 0, dur: 0 },
     },
     zones: d.zones_s.map((s) => s / 60),
     sleep: d.sleep,
@@ -2245,6 +2253,1131 @@ function CalendarView() {
   </div>`;
 }
 
+// ---------- load planner ----------
+// "Load Planner" tab + "Load Builder" modal. Turns the weekly training
+// load into something actionable day to day: hit a weekly load target that
+// raises CTL at a chosen ramp rate, without overtraining.
+//
+// Server data (?resource=planner) supplies per-workout rows for per-hour
+// rate calibration, this week's planned workouts, and saved targets; every
+// trend metric derives from DAYS. All tunables live in PLANNER_CFG.
+const PLANNER_CFG = {
+  rampOptions: [
+    { label: "Recovery", v: -3 },
+    { label: "Hold", v: 0 },
+    { label: "Build +3", v: 3 },
+    { label: "Build +5", v: 5 },
+    { label: "Push +7", v: 7 },
+  ],
+  defaultRamp: 5,
+  ceilingRamp: 8,             // > +8 CTL/wk = overreach zone (red line)
+  rampKey: "hp_ramp_v1",
+  targetsKey: "hp_planner_targets_v1",
+  // Fallback per-hour load rates used when a bucket has fewer than
+  // minRateSamples workouts in the last 6 months (median load/hour else).
+  defaultRates: {
+    Run: { easy: 58, hard: 96 },
+    Strength: { easy: 46, hard: 46 },
+    "Erg-Bike": { easy: 48, hard: 85 },
+    Other: { easy: 30, hard: 30 },
+  },
+  minRateSamples: 5,
+  hardCapDefault: 3,
+  easyZoneShare: 0.7,         // ≥70% of HR time in Z1–Z2 → easy session
+  // Today's traffic light (full rule in lpTodayLight)
+  redTsb: -30, redAcwr: 1.5, redSleep: 6,
+  amberAcwr: 1.3, amberSleep: 6.5, amberTsbLo: -30, amberTsbHi: -25,
+  todayRange: [0.9, 1.3],     // suggested load = neededPerDay × this range
+  redCapLoad: 30,             // red day: 0–30 load (mobility only)
+  amberCapFactor: 0.8,        // amber day: ≤ 0.8 × neededPerDay
+  monotonyFlag: 2.0,          // Foster monotony threshold
+  buildPct: 0.05,             // week vs previous: > +5% = build
+  recoveryPct: -0.10,         //                  < −10% = recovery
+  maxBuildWeeks: 3,           // ≥ 3 consecutive builds → advise recovery wk
+  recoveryWeekCut: 0.8,       // suggested recovery week ≈ −20%
+  taperDays: 14, taperFactor: 0.7, raceWeekFactor: 0.5,
+  ladderWeeks: 9,
+  longRunWarnShare: 0.4,      // long run > 40% of run load → amber
+};
+
+const LP_GROUPS = ["Run", "Strength", "Erg-Bike", "Other"];
+const LP_GROUP_COLOR = { Run: "#34d399", Strength: "#fbbf24", "Erg-Bike": "#2dd4ee", Other: "#9aa6b6" };
+const LP_LIGHT_COLOR = () => ({ green: C.green, amber: C.amber, red: C.red });
+const LP_WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// -- date helpers (all local-time ISO strings, Mon-based weeks) --
+const lpIso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+function lpAddDays(iso, n) { const d = parseISO(iso); d.setDate(d.getDate() + n); return lpIso(d); }
+function lpMondayOf(iso) { const d = parseISO(iso); const diff = (d.getDay() + 6) % 7; d.setDate(d.getDate() - diff); return lpIso(d); }
+function lpDaysBetween(a, b) { return Math.round((parseISO(b) - parseISO(a)) / DAYMS); }
+function lpIsoWeekNum(iso) {
+  const d = parseISO(iso);
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  return Math.ceil(((d - yearStart) / DAYMS + 1) / 7);
+}
+function lpIsoWeekKey(iso) {
+  const d = parseISO(iso);
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  return d.getFullYear() + "-W" + String(lpIsoWeekNum(iso)).padStart(2, "0");
+}
+
+// DAYS indexed by ISO date for O(1) lookups.
+const LP_BY_ISO = new Map(DAYS.map((d) => [lpIso(d.date), d]));
+
+// A day's load split into the planner's four display groups. "Erg-Bike"
+// merges the server's Erg + Bike groups; Other absorbs Swim and anything
+// unmapped (loadTotal minus the named groups, so nothing is ever lost).
+function lpDayGroups(d) {
+  if (!d) return { Run: 0, Strength: 0, "Erg-Bike": 0, Other: 0 };
+  const run = d.perSport.Run.load;
+  const str = d.perSport.Strength.load;
+  const erg = d.perSport.Erg.load + d.perSport.Bike.load;
+  return { Run: run, Strength: str, "Erg-Bike": erg, Other: Math.max(0, d.loadTotal - run - str - erg) };
+}
+
+function lpMedian(arr) {
+  if (!arr.length) return null;
+  const s = arr.slice().sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// Is a server workout row an easy session? ≥70% of banded HR time in
+// Z1–Z2. Workouts without meaningful HR-zone coverage (< 50% of duration)
+// count as easy — strength work rarely has zones and uses one rate anyway.
+function lpIsEasy(w) {
+  const z = w.zones_s || [];
+  const zTot = z.reduce((s, x) => s + (x || 0), 0);
+  if (zTot < 0.5 * (w.duration_s || 0) || zTot <= 0) return true;
+  return ((z[0] || 0) + (z[1] || 0)) / zTot >= PLANNER_CFG.easyZoneShare;
+}
+
+// Median load-per-hour rates from the last 6 months of workouts, split
+// easy/hard for Run and Erg-Bike, single rate for Strength/Other.
+// Falls back to PLANNER_CFG.defaultRates below minRateSamples.
+function lpCalibrateRates(workouts) {
+  const buckets = {};
+  for (const g of LP_GROUPS) buckets[g] = { easy: [], hard: [] };
+  for (const w of workouts || []) {
+    const h = (w.duration_s || 0) / 3600;
+    if (h < 0.25 || !(w.load > 0)) continue; // skip micro-sessions / no load
+    const g = buckets[w.group] ? w.group : "Other";
+    buckets[g][lpIsEasy(w) ? "easy" : "hard"].push(w.load / h);
+  }
+  const rates = {}, samples = {};
+  for (const g of LP_GROUPS) {
+    const def = PLANNER_CFG.defaultRates[g];
+    if (g === "Run" || g === "Erg-Bike") {
+      const e = buckets[g].easy, hd = buckets[g].hard;
+      rates[g] = {
+        easy: e.length >= PLANNER_CFG.minRateSamples ? Math.round(lpMedian(e)) : def.easy,
+        hard: hd.length >= PLANNER_CFG.minRateSamples ? Math.round(lpMedian(hd)) : def.hard,
+      };
+      samples[g] = e.length + hd.length;
+    } else {
+      const all = buckets[g].easy.concat(buckets[g].hard);
+      const r = all.length >= PLANNER_CFG.minRateSamples ? Math.round(lpMedian(all)) : def.easy;
+      rates[g] = { easy: r, hard: r };
+      samples[g] = all.length;
+    }
+  }
+  return { rates, samples };
+}
+
+// Weekly load target + progress for the week containing todayIso.
+//
+// weeklyTarget = 7 × (CTL_monday + ramp) — a linearised approximation of
+// the 42-day EWMA. Averaging (CTL + ramp) load/day pulls CTL toward
+// CTL + ramp (~15% of the remaining gap per week), so one week at this
+// target delivers part of the ramp and a sustained block delivers all of
+// it. Treat it as a pacing target, not "+ramp by Sunday".
+function lpWeekMath(todayIso, ramp, raceDate) {
+  const mon = lpMondayOf(todayIso);
+  const dayIdx = Math.min(6, Math.max(0, lpDaysBetween(mon, todayIso))); // 0=Mon..6=Sun
+  // CTL at the start of the week: Sunday night's value, else Monday's,
+  // else the latest known anywhere (fresh installs / sparse data).
+  const ctlMon =
+    (LP_BY_ISO.get(lpAddDays(mon, -1)) || {}).fitness ??
+    (LP_BY_ISO.get(mon) || {}).fitness ??
+    (DAYS.length ? DAYS[DAYS.length - 1].fitness : 0) ?? 0;
+
+  let weeklyTarget = Math.round(7 * (ctlMon + ramp));
+  const ceiling = Math.round(7 * (ctlMon + PLANNER_CFG.ceilingRamp));
+
+  // Taper: inside 14 days of the race the target auto-reduces (×0.7,
+  // ×0.5 in race week). Skipped entirely once the race has passed.
+  let taper = null;
+  if (raceDate) {
+    const toRace = lpDaysBetween(todayIso, raceDate);
+    if (toRace >= 0 && toRace <= PLANNER_CFG.taperDays) {
+      const f = toRace <= 6 ? PLANNER_CFG.raceWeekFactor : PLANNER_CFG.taperFactor;
+      weeklyTarget = Math.round(weeklyTarget * f);
+      taper = { toRace, factor: f };
+    }
+  }
+
+  let done = 0;
+  const doneByGroup = { Run: 0, Strength: 0, "Erg-Bike": 0, Other: 0 };
+  for (let i = 0; i <= dayIdx; i++) {
+    const d = LP_BY_ISO.get(lpAddDays(mon, i));
+    if (!d) continue;
+    done += d.loadTotal;
+    const g = lpDayGroups(d);
+    for (const k of LP_GROUPS) doneByGroup[k] += g[k];
+  }
+  let lastWeekTotal = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = LP_BY_ISO.get(lpAddDays(mon, i - 7));
+    if (d) lastWeekTotal += d.loadTotal;
+  }
+
+  const daysElapsed = dayIdx + 1;
+  const daysLeft = 7 - dayIdx; // today still counts — you can train today
+  const pace = weeklyTarget * daysElapsed / 7;
+  const neededPerDay = Math.max(0, weeklyTarget - done) / daysLeft;
+  const status = done > ceiling ? "over" : done >= pace * 0.9 ? "on" : "behind";
+
+  return {
+    mon, dayIdx, ctlMon, ramp, weeklyTarget, ceiling, taper,
+    done: Math.round(done), doneByGroup, lastWeekTotal: Math.round(lastWeekTotal),
+    daysElapsed, daysLeft, pace, neededPerDay, status,
+    isoWeek: lpIsoWeekKey(todayIso),
+  };
+}
+
+// Today's traffic light. Rule (simple + tweakable via PLANNER_CFG):
+//   red   — rest / mobility only: TSB < −30 OR ACWR > 1.5 OR HRV "bad"
+//           OR sleep < 6 h
+//   amber — easy Z2 only: ACWR 1.3–1.5 OR HRV "watch" OR sleep 6–6.5 h
+//           OR TSB −30…−25
+//   green — otherwise
+function lpTodayLight(todayIso, neededPerDay) {
+  const cfg = PLANNER_CFG;
+  const d = LP_BY_ISO.get(todayIso) || (DAYS.length ? DAYS[DAYS.length - 1] : null);
+  const tsb = d ? d.form : null;
+  const acwr = d ? d.acwr : null;
+  const hrvInfo = statusHRV(DAYS);
+  let sleep = null;
+  for (const iso of [todayIso, lpAddDays(todayIso, -1)]) {
+    const x = LP_BY_ISO.get(iso);
+    if (x && x.sleep != null) { sleep = x.sleep; break; }
+  }
+
+  let light = "green";
+  if ((tsb != null && tsb < cfg.redTsb) || (acwr != null && acwr > cfg.redAcwr)
+    || (hrvInfo && hrvInfo.status === "bad") || (sleep != null && sleep < cfg.redSleep)) {
+    light = "red";
+  } else if ((acwr != null && acwr >= cfg.amberAcwr)
+    || (hrvInfo && hrvInfo.status === "watch")
+    || (sleep != null && sleep < cfg.amberSleep)
+    || (tsb != null && tsb >= cfg.amberTsbLo && tsb <= cfg.amberTsbHi)) {
+    light = "amber";
+  }
+
+  let lo = Math.round(neededPerDay * cfg.todayRange[0]);
+  let hi = Math.round(neededPerDay * cfg.todayRange[1]);
+  if (light === "red") { lo = 0; hi = cfg.redCapLoad; }
+  else if (light === "amber") { hi = Math.round(neededPerDay * cfg.amberCapFactor); lo = Math.min(lo, hi); }
+
+  const st = (v, bad, warn, dir) => {
+    if (v == null) return "watch";
+    if (dir === "lowBad") return v < bad ? "bad" : v < warn ? "watch" : "good";
+    return v > bad ? "bad" : v > warn ? "watch" : "good";
+  };
+  const inputs = [
+    { label: "Form (TSB)", value: tsb != null ? r1(tsb) : "—",
+      status: tsb == null ? "watch" : tsb < cfg.redTsb ? "bad" : tsb <= cfg.amberTsbHi ? "watch" : "good" },
+    { label: "ACWR", value: acwr != null ? acwr.toFixed(2) : "—",
+      status: st(acwr, cfg.redAcwr, cfg.amberAcwr - 0.001, "highBad") },
+    { label: "HRV", value: hrvInfo ? hrvInfo.value + " ms" : "—",
+      status: hrvInfo ? hrvInfo.status : "watch" },
+    { label: "Sleep", value: sleep != null ? sleep.toFixed(1) + " h" : "—",
+      status: st(sleep, cfg.redSleep, cfg.amberSleep, "lowBad") },
+  ];
+  return { light, lo, hi, inputs };
+}
+
+// Weekly totals for the ladder + build/hold/recovery classification.
+// cls compares each week to the one before: build > +5%, recovery < −10%,
+// hold otherwise (incl. the −5…−10% shoulder).
+function lpWeeklyRows(nWeeks, todayIso) {
+  const curMon = lpMondayOf(todayIso);
+  const rows = [];
+  for (let w = nWeeks - 1; w >= 0; w--) {
+    const mon = lpAddDays(curMon, -7 * w);
+    let total = 0, ctlEnd = null;
+    for (let i = 0; i < 7; i++) {
+      const d = LP_BY_ISO.get(lpAddDays(mon, i));
+      if (d) { total += d.loadTotal; if (d.fitness != null) ctlEnd = d.fitness; }
+    }
+    rows.push({ mon, week: lpIsoWeekNum(mon), total: Math.round(total), ctlEnd, isCurrent: mon === curMon });
+  }
+  rows.forEach((r, i) => {
+    const prev = rows[i - 1];
+    if (!prev || !prev.total) { r.cls = "hold"; return; }
+    const pct = (r.total - prev.total) / prev.total;
+    r.cls = pct > PLANNER_CFG.buildPct ? "build" : pct < PLANNER_CFG.recoveryPct ? "recovery" : "hold";
+  });
+  return rows;
+}
+
+// Trailing consecutive build weeks, counted over COMPLETED weeks only
+// (the in-progress week can't be classified fairly).
+function lpConsecutiveBuilds(rows) {
+  let n = 0;
+  for (let i = rows.length - 2; i >= 0; i--) {
+    if (rows[i].cls === "build") n++;
+    else break;
+  }
+  return n;
+}
+
+// Guardrail metrics beyond the headline ACWR.
+function lpGuardrails(todayIso, todayHi) {
+  const last7 = DAYS.slice(-7), last28 = DAYS.slice(-28);
+
+  // Run-only ACWR — same 7d/28d mean ratio, run load only.
+  const run7 = mean(last7.map((d) => d.perSport.Run.load)) ?? 0;
+  const run28 = mean(last28.map((d) => d.perSport.Run.load)) ?? 0;
+  const runAcwr = run28 > 0 ? run7 / run28 : null;
+
+  // ACWR projection: adding N load today moves the 7d mean by N/7 and the
+  // 28d mean by N/28. Solve for the N where the ratio crosses 1.3.
+  const a7 = mean(last7.map((d) => d.loadTotal)) ?? 0;
+  const a28 = mean(last28.map((d) => d.loadTotal)) ?? 0;
+  const acwrNow = a28 > 0 ? a7 / a28 : null;
+  let acwrIfHi = null, loadTo13 = null;
+  if (a28 > 0) {
+    acwrIfHi = (a7 + todayHi / 7) / (a28 + todayHi / 28);
+    const x = 28 * (1.3 * a28 - a7) / 2.7; // (a7+x/7)/(a28+x/28) = 1.3
+    loadTo13 = x > 0 ? Math.round(x) : 0;
+  }
+
+  // Foster monotony + strain over the trailing 7 days.
+  const loads = last7.map((d) => d.loadTotal);
+  const m = mean(loads) ?? 0;
+  const sd = Math.sqrt(mean(loads.map((x) => (x - m) ** 2)) ?? 0);
+  const monotony = sd > 0 ? m / sd : null;
+  const weekSum = loads.reduce((s, x) => s + x, 0);
+  const strain = monotony != null ? Math.round(weekSum * monotony) : null;
+
+  return { runAcwr, acwrNow, acwrIfHi, loadTo13, monotony, strain };
+}
+
+// Load per Load-Builder row: hours × blended (easy/hard) rate. The long
+// run is counted INSIDE run hours; its own load is priced at the easy rate
+// purely for the share readout (set the intensity mix so it reflects the
+// long run being easy — the row formula stays hours × blend, which is what
+// the totals verify against).
+function lpRowLoad(g, row, rates) {
+  const r = rates[g] || PLANNER_CFG.defaultRates[g];
+  const mix = (row.hardPct || 0) / 100;
+  const blended = (1 - mix) * r.easy + mix * r.hard;
+  return (row.hours || 0) * blended;
+}
+function lpRowHardSessions(row) {
+  return Math.round((row.sessions || 0) * (row.hardPct || 0) / 100);
+}
+
+// Project CTL + ACWR to Sunday: spread the remaining planned load evenly
+// over the remaining days and run the standard EWMAs forward. Today's CTL
+// already includes today's completed load, so we simulate the days AFTER
+// today (plus any load still to come today lands in tomorrow's step —
+// close enough for a Sunday estimate).
+function lpProjectSunday(todayIso, plannedWeekTotal, doneSoFar) {
+  const mon = lpMondayOf(todayIso);
+  const dayIdx = Math.min(6, Math.max(0, lpDaysBetween(mon, todayIso)));
+  const nFuture = 6 - dayIdx;
+  const last = DAYS.length ? DAYS[DAYS.length - 1] : null;
+  let ctl = last && last.fitness != null ? last.fitness : 0;
+  const remaining = Math.max(0, plannedWeekTotal - doneSoFar);
+  const daily = nFuture > 0 ? remaining / nFuture : 0;
+  const k = 1 - Math.exp(-1 / 42);
+  const hist = DAYS.slice(-28).map((d) => d.loadTotal);
+  for (let i = 0; i < nFuture; i++) {
+    ctl = ctl + (daily - ctl) * k;
+    hist.push(daily);
+  }
+  const h7 = hist.slice(-7), h28 = hist.slice(-28);
+  const acwr = mean(h28) > 0 ? mean(h7) / mean(h28) : null;
+  return { ctlSunday: r1(ctl), acwrSunday: acwr != null ? r1(acwr * 100) / 100 : null };
+}
+
+// localStorage plumbing (same guarded pattern as the theme/races keys).
+function lpLoadRamp() {
+  try {
+    const v = JSON.parse(localStorage.getItem(PLANNER_CFG.rampKey));
+    if (typeof v === "number" && PLANNER_CFG.rampOptions.some((o) => o.v === v)) return v;
+  } catch { /* ignore */ }
+  return PLANNER_CFG.defaultRamp;
+}
+function lpSaveRamp(v) {
+  try { localStorage.setItem(PLANNER_CFG.rampKey, JSON.stringify(v)); } catch { /* ignore */ }
+}
+function lpLoadLocalTargets() {
+  try { return JSON.parse(localStorage.getItem(PLANNER_CFG.targetsKey)); } catch { return null; }
+}
+function lpSaveLocalTargets(obj) {
+  try { localStorage.setItem(PLANNER_CFG.targetsKey, JSON.stringify(obj)); } catch { /* ignore */ }
+}
+
+function lpToken() {
+  const params = new URLSearchParams(location.search);
+  return params.get("t") || params.get("token") || "";
+}
+const LP_API = "https://ptisuvfdufngdfxfrzvn.supabase.co/functions/v1/dashboard?resource=planner&token=";
+
+// -- small UI atoms --
+
+function LpStepper({ value, step = 1, min = 0, max = 99, onChange, fmt }) {
+  const btn = (txt, fn, dis) => html`<button onClick=${fn} disabled=${dis}
+    style=${{ width: 26, height: 26, borderRadius: 7, border: "1px solid " + C.border, background: "transparent", color: dis ? C.border : C.text, cursor: dis ? "default" : "pointer", lineHeight: 1, flexShrink: 0 }}
+    className="text-sm font-bold">${txt}</button>`;
+  return html`<div className="inline-flex items-center gap-1" style=${{ minWidth: 92 }}>
+    ${btn("−", () => onChange(+Math.max(min, value - step).toFixed(2)), value <= min)}
+    <span className="text-sm font-semibold text-center" style=${{ color: C.text, flex: 1, minWidth: 34 }}>${fmt ? fmt(value) : value}</span>
+    ${btn("+", () => onChange(+Math.min(max, value + step).toFixed(2)), value >= max)}
+  </div>`;
+}
+
+// Progress bar with pace line + target tick + red ceiling marker. The
+// scale runs a touch past the ceiling so the red line always paints.
+function LpBar({ done, target, ceiling, pace, height = 16, fill }) {
+  const scaleMax = Math.max(ceiling * 1.05, done * 1.05, target * 1.05, 1);
+  const pct = (v) => Math.min(100, Math.max(0, (v / scaleMax) * 100));
+  const mark = (v, color, dashed, label) => v == null ? null : html`<div style=${{
+      position: "absolute", left: pct(v) + "%", top: -3, bottom: -3, width: 0,
+      borderLeft: (dashed ? "2px dashed " : "2px solid ") + color, transform: "translateX(-1px)",
+    }} title=${label} />`;
+  return html`<div style=${{ position: "relative", height, background: C.bg, border: "1px solid " + C.border, borderRadius: 8 }}>
+    <div style=${{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(done) + "%", background: fill || C.cyan, borderRadius: 7, opacity: 0.9, transition: "width .3s" }} />
+    ${mark(pace, C.text, true, "Pace — where you should be by today")}
+    ${mark(target, C.green, false, "Weekly target")}
+    ${mark(ceiling, C.red, false, "Ceiling — overreach above this")}
+  </div>`;
+}
+
+// Target-ramp chip + popover. Hidden-by-default selector per Kevin's spec:
+// the chip shows the current ramp, the option list only appears on click.
+function LpRampChip({ ramp, onChange }) {
+  const [open, setOpen] = useState(false);
+  const opt = PLANNER_CFG.rampOptions.find((o) => o.v === ramp);
+  return html`<div style=${{ position: "relative" }}>
+    <button onClick=${() => setOpen((o) => !o)}
+      style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 999, color: C.text, minHeight: 40 }}
+      className="px-4 py-2 text-xs font-semibold flex items-center gap-2 w-full sm:w-auto justify-center">
+      <span style=${{ color: C.muted }}>Target ramp</span>
+      <span style=${{ color: C.cyan }}>${ramp > 0 ? "+" + ramp : ramp} CTL / wk</span>
+      <span style=${{ color: C.muted }}>· ${open ? "Close" : "Change"}</span>
+    </button>
+    ${open ? html`<div style=${{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 40, background: C.card, border: "1px solid " + C.border, borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,0.45)", minWidth: 190 }} className="p-1.5">
+      ${PLANNER_CFG.rampOptions.map((o) => {
+        const on = o.v === ramp;
+        return html`<button key=${o.v} onClick=${() => { onChange(o.v); setOpen(false); }}
+          style=${{ color: on ? C.cyan : C.text, background: on ? C.cyan + "14" : "transparent", borderRadius: 8, border: "none", cursor: "pointer" }}
+          className="w-full text-left px-3 py-2 text-xs font-semibold flex items-center justify-between">
+          <span>${o.label}</span>
+          <span style=${{ color: on ? C.cyan : C.muted }}>${o.v > 0 ? "+" + o.v : o.v}</span>
+        </button>`;
+      })}
+      <div style=${{ color: C.muted, borderTop: "1px solid " + C.border }} className="text-[10px] px-3 pt-2 pb-1 mt-1">
+        How fast weekly load should lift fitness (CTL). +3–5 is a sustainable build; +7 is aggressive.
+      </div>
+    </div>` : null}
+  </div>`;
+}
+
+// Mon–Sun strip: solid bars for what happened, dashed outlines for what's
+// suggested. Today's column gets a subtle cyan wash.
+function LpWeekStrip({ days }) {
+  const maxLoad = Math.max(30, ...days.map((d) => d.load || 0));
+  const BAR_H = 92;
+  return html`<div className="grid grid-cols-7 gap-1 sm:gap-2">
+    ${days.map((d) => {
+      const hpx = Math.max(d.load > 0 ? 6 : 3, Math.round((Math.min(d.load, maxLoad) / maxLoad) * BAR_H));
+      const rest = !d.load;
+      return html`<div key=${d.iso} className="flex flex-col items-center rounded-lg px-0.5 pt-1.5 pb-1"
+        style=${{ background: d.isToday ? "rgba(45,212,238,0.06)" : "transparent" }}>
+        <div style=${{ color: d.isToday ? C.cyan : C.muted }} className="text-[10px] font-semibold mb-1">${d.wd}</div>
+        <div style=${{ height: BAR_H }} className="w-full flex items-end justify-center">
+          <div style=${d.kind === "suggested"
+            ? { width: "70%", height: hpx, border: "1.5px dashed " + C.cyan, background: C.cyan + "0d", borderRadius: 5 }
+            : { width: "70%", height: hpx, background: rest ? C.border : C.cyan, borderRadius: 5, opacity: rest ? 0.7 : 0.92 }} />
+        </div>
+        <div style=${{ color: C.text }} className="text-[11px] font-bold mt-1">${d.load ? Math.round(d.load) : "—"}</div>
+        <div style=${{ color: C.muted, minHeight: 24, lineHeight: 1.15 }} className="text-[9px] text-center mt-0.5 px-0.5 break-words w-full">${d.label}</div>
+      </div>`;
+    })}
+  </div>`;
+}
+
+// Weekly-load ladder: one bar per ISO week, coloured by the build / hold /
+// recovery classification. The current week renders as a dashed outline at
+// target height with a solid fill for what's done so far. CTL at week end
+// sits above each bar (no dual-axis line — the number is enough).
+function LpLadder({ rows, currentTarget, currentDone }) {
+  const LADDER_CLS_COLOR = { build: C.cyan, hold: "#5b6b82", recovery: C.violet };
+  const maxV = Math.max(1, currentTarget || 0, ...rows.map((r) => r.total));
+  const BAR_H = 130;
+  const px = (v) => Math.max(3, Math.round((Math.min(v, maxV) / maxV) * BAR_H));
+  return html`<div>
+    <div className="grid gap-1 sm:gap-2" style=${{ gridTemplateColumns: "repeat(" + rows.length + ", minmax(0,1fr))" }}>
+      ${rows.map((r) => {
+        const col = LADDER_CLS_COLOR[r.cls] || C.muted;
+        return html`<div key=${r.mon} className="flex flex-col items-center">
+          <div style=${{ color: C.muted }} className="text-[9px] font-semibold mb-1">${r.ctlEnd != null ? Math.round(r.ctlEnd) : ""}</div>
+          <div style=${{ height: BAR_H }} className="w-full flex items-end justify-center">
+            ${r.isCurrent
+              ? html`<div style=${{ width: "72%", height: px(Math.max(currentTarget, currentDone)), border: "1.5px dashed " + C.cyan, borderRadius: 6, position: "relative", overflow: "hidden" }}>
+                  <div style=${{ position: "absolute", left: 0, right: 0, bottom: 0, height: (100 * Math.min(1, currentDone / Math.max(1, Math.max(currentTarget, currentDone)))) + "%", background: C.cyan, opacity: 0.85 }} />
+                </div>`
+              : html`<div style=${{ width: "72%", height: px(r.total), background: col, borderRadius: 6, opacity: 0.9 }} />`}
+          </div>
+          <div style=${{ color: C.text }} className="text-[10px] font-bold mt-1 text-center">
+            ${r.isCurrent ? Math.round(currentDone) + " / " + Math.round(currentTarget) : r.total}
+          </div>
+          <div style=${{ color: r.isCurrent ? C.cyan : C.muted }} className="text-[9px] mt-0.5">W${r.week}</div>
+        </div>`;
+      })}
+    </div>
+    <div className="flex flex-wrap gap-3 mt-3 text-[10px]" style=${{ color: C.muted }}>
+      <span><span style=${{ color: C.cyan }}>■</span> Build (> +5%)</span>
+      <span><span style=${{ color: "#5b6b82" }}>■</span> Hold (±5%)</span>
+      <span><span style=${{ color: C.violet }}>■</span> Recovery (${"<"} −10%)</span>
+      <span><span style=${{ color: C.muted }}>▢</span> This week (fill = done so far) · number above = CTL at week end</span>
+    </div>
+  </div>`;
+}
+
+// -- Load Builder modal --
+// Sets this week's per-sport targets from HOURS, not from a recent average
+// (Kevin is returning from illness — a 4-week average would sandbag him).
+const LP_PRESET_STD = {
+  Run: { sessions: 4, hours: 3.5, hardPct: 30, longRunH: 1.25 },
+  Strength: { sessions: 3, hours: 3.0, hardPct: 0, longRunH: 0 },
+  "Erg-Bike": { sessions: 2, hours: 2.0, hardPct: 30, longRunH: 0 },
+  Other: { sessions: 1, hours: 0.5, hardPct: 0, longRunH: 0 },
+};
+function lpScalePreset(base, f) {
+  const out = {};
+  for (const g of LP_GROUPS) {
+    const r = base[g];
+    out[g] = {
+      sessions: Math.round(r.sessions * f),
+      hours: Math.round(r.hours * f * 4) / 4,
+      hardPct: r.hardPct,
+      longRunH: Math.round(r.longRunH * f * 4) / 4,
+    };
+  }
+  return out;
+}
+
+function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, lastWeekActual, savedTargets, onSaved }) {
+  const [rows, setRows] = useState(LP_PRESET_STD);
+  const [hardCap, setHardCap] = useState(PLANNER_CFG.hardCapDefault);
+  const [rates, setRates] = useState(PLANNER_CFG.defaultRates);
+  const [editRates, setEditRates] = useState(false);
+  const [saveMsg, setSaveMsg] = useState(null); // {ok, text}
+
+  // (Re)initialise whenever the modal opens: saved targets for this ISO
+  // week win, otherwise the Standard-build preset + calibrated rates.
+  React.useEffect(() => {
+    if (!open) return;
+    setSaveMsg(null);
+    if (savedTargets && savedTargets.isoWeek === week.isoWeek && savedTargets.rows) {
+      setRows({ ...LP_PRESET_STD, ...savedTargets.rows });
+      setHardCap(savedTargets.hardCap ?? PLANNER_CFG.hardCapDefault);
+      setRates({ ...(calibrated?.rates || PLANNER_CFG.defaultRates), ...(savedTargets.rates || {}) });
+    } else {
+      setRows(LP_PRESET_STD);
+      setHardCap(PLANNER_CFG.hardCapDefault);
+      setRates(calibrated?.rates || PLANNER_CFG.defaultRates);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const setRow = (g, patch) => setRows((r) => ({ ...r, [g]: { ...r[g], ...patch } }));
+  const applyPreset = (name) => {
+    setSaveMsg(null);
+    if (name === "std") setRows(LP_PRESET_STD);
+    else if (name === "illness") setRows(lpScalePreset(LP_PRESET_STD, 0.7));
+    else if (name === "recovery") setRows(lpScalePreset(LP_PRESET_STD, 0.8));
+    else if (name === "race") {
+      const r = lpScalePreset(LP_PRESET_STD, 0.5);
+      // Race week keeps exactly one hard touch (on the run) for sharpness.
+      r.Run.hardPct = r.Run.sessions > 0 ? Math.round(100 / r.Run.sessions) : 0;
+      r["Erg-Bike"].hardPct = 0;
+      r.Run.longRunH = 0;
+      setRows(r);
+    } else if (name === "copy" && lastWeekActual) setRows(lastWeekActual);
+  };
+
+  const rowLoads = {};
+  let totalLoad = 0, totalHours = 0, hardCount = 0;
+  for (const g of LP_GROUPS) {
+    rowLoads[g] = Math.round(lpRowLoad(g, rows[g], rates));
+    totalLoad += rowLoads[g];
+    totalHours += rows[g].hours || 0;
+    hardCount += lpRowHardSessions(rows[g]);
+  }
+  const runRow = rows.Run;
+  const longRunLoad = Math.round(Math.min(runRow.longRunH || 0, runRow.hours || 0) * (rates.Run?.easy ?? 58));
+  const longRunShare = rowLoads.Run > 0 ? longRunLoad / rowLoads.Run : 0;
+  const gap = week.weeklyTarget - totalLoad;
+  const gapMinutes = Math.round(Math.abs(gap) / (rates.Run?.easy || 58) * 60 / 5) * 5;
+  const impliedRamp = r1(totalLoad / 7 - week.ctlMon);
+  const proj = lpProjectSunday(lpAddDays(week.mon, week.dayIdx), totalLoad, week.done);
+  const hoursRange = week.weeklyHoursRange || [8, 12];
+
+  async function save() {
+    const obj = {
+      isoWeek: week.isoWeek, ramp: week.ramp, rows, hardCap, rates,
+      savedAt: new Date().toISOString(),
+    };
+    lpSaveLocalTargets(obj);
+    onSaved(obj);
+    setSaveMsg({ ok: true, text: "Saved on this device · syncing…" });
+    try {
+      const r = await fetch(LP_API + encodeURIComponent(lpToken()), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ isoWeek: obj.isoWeek, payload: obj }),
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      setSaveMsg({ ok: true, text: "Saved · synced across devices ✓" });
+    } catch {
+      setSaveMsg({ ok: false, text: "Saved on this device — cloud sync unavailable (targets won't appear on other devices)" });
+    }
+  }
+
+  const sliderRow = (g) => html`<div className="flex items-center gap-2 mt-1.5">
+    <span style=${{ color: C.muted, width: 60 }} className="text-[10px]">Intensity</span>
+    <input type="range" min="0" max="60" step="5" value=${rows[g].hardPct}
+      onInput=${(e) => setRow(g, { hardPct: +e.target.value })}
+      style=${{ flex: 1, accentColor: C.cyan, height: 4 }} />
+    <span style=${{ color: C.text, width: 92 }} className="text-[10px] text-right">${100 - rows[g].hardPct}% easy · ${rows[g].hardPct}% hard</span>
+  </div>`;
+
+  return html`<div onClick=${onClose} style=${{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(2,6,14,0.65)" }}
+    className=${"flex " + (isMobile ? "items-end" : "items-center justify-center p-4")}>
+    <div onClick=${(e) => e.stopPropagation()}
+      style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: isMobile ? "16px 16px 0 0" : 14, width: isMobile ? "100%" : "min(780px, 100%)", maxHeight: isMobile ? "92vh" : "88vh", overflowY: "auto" }}>
+
+      <div className="flex items-start justify-between gap-3 p-4 sm:p-5" style=${{ borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.card, zIndex: 5 }}>
+        <div>
+          <div style=${{ color: C.muted, letterSpacing: "0.13em" }} className="text-[10px] font-semibold uppercase">Load Builder</div>
+          <div style=${{ color: C.text }} className="text-lg font-bold mt-0.5">Week ${week.isoWeek.split("-W")[1]} targets</div>
+          <div style=${{ color: C.muted }} className="text-[11px] mt-0.5">Plan from hours — rates convert hours → load per sport</div>
+        </div>
+        <button onClick=${onClose} style=${{ background: "transparent", border: "1px solid " + C.border, color: C.muted, borderRadius: 999 }} className="px-3 py-1.5 text-xs font-semibold shrink-0">✕ Close</button>
+      </div>
+
+      <div className="p-4 sm:p-5">
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          ${[["std", "Standard build"], ["illness", "Return from illness −30%"], ["recovery", "Recovery week −20%"], ["race", "Race week −50%"], ["copy", "Copy last week"]].map(([k, label]) =>
+            html`<button key=${k} onClick=${() => applyPreset(k)}
+              disabled=${k === "copy" && !lastWeekActual}
+              style=${{ background: "transparent", color: k === "copy" && !lastWeekActual ? C.border : C.muted, border: "1px solid " + C.border, borderRadius: 999, cursor: k === "copy" && !lastWeekActual ? "default" : "pointer" }}
+              className="px-3 py-1.5 text-[11px] font-semibold">${label}</button>`)}
+        </div>
+
+        ${LP_GROUPS.map((g) => {
+          const row = rows[g];
+          const mixable = g === "Run" || g === "Erg-Bike";
+          return html`<div key=${g} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 12 }} className="p-3 mb-2">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex items-center gap-2" style=${{ width: 92 }}>
+                <span style=${{ width: 8, height: 8, borderRadius: 99, background: LP_GROUP_COLOR[g] }} />
+                <span style=${{ color: C.text }} className="text-sm font-semibold">${g}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span style=${{ color: C.muted }} className="text-[10px]">Sessions</span>
+                <${LpStepper} value=${row.sessions} step=${1} min=${0} max=${14} onChange=${(v) => setRow(g, { sessions: v })} />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span style=${{ color: C.muted }} className="text-[10px]">Hours</span>
+                <${LpStepper} value=${row.hours} step=${0.25} min=${0} max=${20} onChange=${(v) => setRow(g, { hours: v })} fmt=${(v) => v.toFixed(2).replace(/\.?0+$/, "") + "h"} />
+              </div>
+              <div className="ml-auto text-right">
+                <div style=${{ color: C.text }} className="text-base font-bold">${rowLoads[g]}</div>
+                <div style=${{ color: C.muted }} className="text-[9px] uppercase">load</div>
+              </div>
+            </div>
+            ${mixable ? sliderRow(g) : null}
+            ${g === "Run" ? html`<div className="flex flex-wrap items-center gap-2 mt-2 pt-2" style=${{ borderTop: "1px dashed " + C.border }}>
+              <span style=${{ color: C.muted }} className="text-[10px]">Long run</span>
+              <${LpStepper} value=${row.longRunH} step=${0.25} min=${0} max=${Math.max(0, row.hours)} onChange=${(v) => setRow(g, { longRunH: v })} fmt=${(v) => v.toFixed(2).replace(/\.?0+$/, "") + "h"} />
+              <span style=${{ color: longRunShare > PLANNER_CFG.longRunWarnShare ? C.amber : C.muted }} className="text-[10px]">
+                ≈ ${longRunLoad} of run load · ${Math.round(longRunShare * 100)}% of run load${longRunShare > PLANNER_CFG.longRunWarnShare ? " — heavy for one session" : ""}
+              </span>
+            </div>` : null}
+          </div>`;
+        })}
+
+        <div className="flex flex-wrap items-center gap-3 mt-3 mb-4">
+          <span style=${{ color: C.muted }} className="text-[11px] font-semibold">Hard sessions cap</span>
+          <${LpStepper} value=${hardCap} step=${1} min=${0} max=${7} onChange=${setHardCap} />
+          <span style=${{ color: hardCount > hardCap ? C.red : hardCount === hardCap ? C.amber : C.green }} className="text-[11px] font-semibold">
+            ${hardCount} / ${hardCap} planned${hardCount > hardCap ? " — over the cap" : hardCount === hardCap ? " — at the cap" : ""}
+          </span>
+          <button onClick=${() => setEditRates((e) => !e)} style=${{ color: C.muted, background: "transparent", border: "1px solid " + C.border, borderRadius: 999 }} className="px-3 py-1 text-[10px] font-semibold ml-auto">
+            ${editRates ? "Done editing rates" : "Edit per-hour rates"}
+          </button>
+        </div>
+
+        ${editRates ? html`<div style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 12 }} className="p-3 mb-4">
+          <div style=${{ color: C.muted }} className="text-[10px] mb-2">
+            Load per hour, calibrated from your last 6 months (median; needs ≥${PLANNER_CFG.minRateSamples} sessions per bucket, else defaults). Edits are saved with the targets.
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            ${LP_GROUPS.map((g) => html`<div key=${g} className="flex items-center gap-2">
+              <span style=${{ color: C.text, width: 72 }} className="text-[11px] font-semibold">${g}</span>
+              ${(g === "Run" || g === "Erg-Bike" ? ["easy", "hard"] : ["easy"]).map((kind) => html`<label key=${kind} className="flex items-center gap-1 text-[10px]" style=${{ color: C.muted }}>
+                ${g === "Run" || g === "Erg-Bike" ? kind : "rate"}
+                <input type="number" min="5" max="200" value=${rates[g][kind]}
+                  onInput=${(e) => {
+                    const v = Math.max(1, +e.target.value || 0);
+                    setRates((r) => ({ ...r, [g]: kind === "easy" && !(g === "Run" || g === "Erg-Bike") ? { easy: v, hard: v } : { ...r[g], [kind]: v } }));
+                  }}
+                  style=${{ width: 58, background: C.card, color: C.text, border: "1px solid " + C.border, borderRadius: 6, padding: "3px 6px" }} />
+              </label>`)}
+              ${calibrated && calibrated.samples ? html`<span style=${{ color: C.border }} className="text-[9px]">${calibrated.samples[g] || 0} sess.</span>` : null}
+            </div>`)}
+          </div>
+        </div>` : null}
+
+        <div style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 12 }} className="p-3.5">
+          <div className="flex items-baseline justify-between mb-2">
+            <span style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[10px] font-semibold uppercase">Planned vs target</span>
+            <span style=${{ color: C.text }} className="text-sm font-bold">${totalLoad} <span style=${{ color: C.muted }} className="font-normal">/ ${week.weeklyTarget} target</span></span>
+          </div>
+          <${LpBar} done=${totalLoad} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${null} height=${12} fill=${totalLoad > week.ceiling ? C.red : C.cyan} />
+          <div className="mt-3 flex flex-col gap-1.5 text-[11px]">
+            ${gap > 10 ? html`<div style=${{ color: C.amber }}>~${gap} under target — add ~${gapMinutes} min easy run, or accept a ${impliedRamp > 0 ? "+" + impliedRamp : impliedRamp} CTL/wk pace.</div>`
+              : totalLoad > week.ceiling ? html`<div style=${{ color: C.red }}>${totalLoad - week.ceiling} over the +${PLANNER_CFG.ceilingRamp} CTL/wk ceiling — trim hours or intensity.</div>`
+              : gap < -10 ? html`<div style=${{ color: C.green }}>${-gap} over target — fine if it felt planned; watch the ceiling.</div>`
+              : html`<div style=${{ color: C.green }}>On target ✓</div>`}
+            <div style=${{ color: C.muted }}>Projected Sunday: CTL ≈ <span style=${{ color: C.text }} className="font-semibold">${proj.ctlSunday}</span>${proj.acwrSunday != null ? html` · ACWR ≈ <span style=${{ color: proj.acwrSunday > 1.3 ? C.amber : C.text }} className="font-semibold">${proj.acwrSunday.toFixed(2)}</span>` : null}</div>
+            <div style=${{ color: totalHours >= hoursRange[0] && totalHours <= hoursRange[1] ? C.muted : C.amber }}>
+              ${totalHours.toFixed(2).replace(/\.?0+$/, "")} h planned · goal range ${hoursRange[0]}–${hoursRange[1]} h${totalHours < hoursRange[0] ? " — under" : totalHours > hoursRange[1] ? " — over" : " ✓"}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 mt-3 pt-3" style=${{ borderTop: "1px solid " + C.border }}>
+            <button onClick=${save}
+              style=${{ background: C.cyan, color: "#06212a", border: "none", borderRadius: 10, cursor: "pointer" }}
+              className="px-4 py-2 text-xs font-bold">Save as this week's targets</button>
+            ${saveMsg ? html`<span style=${{ color: saveMsg.ok ? C.green : C.amber }} className="text-[10px]">${saveMsg.text}</span>` : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Ramp-rate band: <0 declining · 0–3 hold · 3–7 productive build · >7 danger.
+function LpRampBand({ value }) {
+  const min = -3, max = 10;
+  const pct = (v) => ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * 100;
+  const segs = [
+    { a: -3, b: 0, c: C.muted, op: 0.35 },
+    { a: 0, b: 3, c: "#5b6b82", op: 0.8 },
+    { a: 3, b: 7, c: C.green, op: 0.8 },
+    { a: 7, b: 10, c: C.red, op: 0.8 },
+  ];
+  return html`<div>
+    <div style=${{ position: "relative", height: 10, borderRadius: 6, overflow: "visible" }} className="flex">
+      ${segs.map((s, i) => html`<div key=${i} style=${{ width: (pct(s.b) - pct(s.a)) + "%", background: s.c, opacity: s.op, borderRadius: i === 0 ? "6px 0 0 6px" : i === segs.length - 1 ? "0 6px 6px 0" : 0 }} />`)}
+      ${value != null ? html`<div style=${{ position: "absolute", left: pct(value) + "%", top: -3, width: 3, height: 16, background: "#fff", borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.5)", transform: "translateX(-50%)" }} />` : null}
+    </div>
+    <div className="flex justify-between mt-1 text-[9px]" style=${{ color: C.muted }}>
+      <span>decline</span><span style=${{ marginLeft: "8%" }}>0 hold</span><span>3 · build</span><span>7 · danger</span>
+    </div>
+  </div>`;
+}
+
+function LoadPlannerView() {
+  const [server, setServer] = useState(null);
+  const [serverErr, setServerErr] = useState(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const [ramp, setRampState] = useState(lpLoadRamp);
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [targets, setTargets] = useState(lpLoadLocalTargets);
+
+  const setRamp = (v) => { lpSaveRamp(v); setRampState(v); };
+
+  React.useEffect(() => {
+    const mq = window.matchMedia("(max-width: 760px)");
+    const on = () => setIsMobile(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+
+  // Lazy fetch, same pattern as the Calendar tab. The tab still renders
+  // without it (rates fall back to defaults, split panel to shares).
+  React.useEffect(() => {
+    if (server || serverErr) return;
+    fetch(LP_API + encodeURIComponent(lpToken()))
+      .then(async (r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then((d) => {
+        setServer(d);
+        // Server-saved targets win over local when they're for this week
+        // and at least as new (that's the phone ↔ laptop sync).
+        if (d.targets && d.targets.isoWeek === lpIsoWeekKey(lpIso(new Date()))) {
+          setTargets((local) => {
+            if (!local || local.isoWeek !== d.targets.isoWeek) return d.targets;
+            return (d.targets.savedAt || "") >= (local.savedAt || "") ? d.targets : local;
+          });
+        }
+      })
+      .catch((e) => setServerErr(String(e.message || e)));
+  }, [server, serverErr]);
+
+  const todayIso = lpIso(new Date());
+  const raceDate = server ? server.raceDate : null;
+  const week = useMemo(() => {
+    const w = lpWeekMath(todayIso, ramp, raceDate);
+    w.weeklyHoursRange = (server && server.weeklyHoursRange) || [8, 12];
+    return w;
+  }, [todayIso, ramp, raceDate, server]);
+
+  const light = useMemo(() => lpTodayLight(todayIso, week.neededPerDay), [todayIso, week]);
+  const guard = useMemo(() => lpGuardrails(todayIso, light.hi), [todayIso, light.hi]);
+  const ladderRows = useMemo(() => lpWeeklyRows(PLANNER_CFG.ladderWeeks, todayIso), [todayIso]);
+  const builds = lpConsecutiveBuilds(ladderRows);
+  const calibrated = useMemo(() => lpCalibrateRates(server && server.workouts6m), [server]);
+
+  const tgt = targets && targets.isoWeek === week.isoWeek ? targets : null;
+  const effRates = (tgt && tgt.rates) || calibrated.rates;
+  const hardCap = (tgt && tgt.hardCap) ?? PLANNER_CFG.hardCapDefault;
+
+  // This week's per-workout rows → session counts, hard-session count and
+  // day labels. Sub-15-min entries don't count as sessions.
+  const weekWorkouts = useMemo(() => (server && server.workouts6m || [])
+    .filter((w) => w.date >= week.mon && w.date <= todayIso), [server, week.mon, todayIso]);
+  const sessionsDone = useMemo(() => {
+    const out = { Run: 0, Strength: 0, "Erg-Bike": 0, Other: 0 };
+    for (const w of weekWorkouts) if ((w.duration_s || 0) >= 900) out[out[w.group] != null ? w.group : "Other"]++;
+    return out;
+  }, [weekWorkouts]);
+  const hardDone = useMemo(
+    () => weekWorkouts.filter((w) => (w.duration_s || 0) >= 1200 && !lpIsEasy(w)).length,
+    [weekWorkouts]);
+
+  // Per-group targets for the split panel: saved Load Builder rows win;
+  // fallback = 6-month per-sport load share × this week's target.
+  const groupTargets = useMemo(() => {
+    if (tgt && tgt.rows) {
+      const out = {};
+      for (const g of LP_GROUPS) out[g] = {
+        load: Math.round(lpRowLoad(g, tgt.rows[g] || { hours: 0 }, effRates)),
+        sessions: (tgt.rows[g] || {}).sessions || 0,
+      };
+      return { rows: out, source: "builder" };
+    }
+    const w6 = server && server.workouts6m;
+    if (w6 && w6.length) {
+      const sums = { Run: 0, Strength: 0, "Erg-Bike": 0, Other: 0 };
+      let tot = 0;
+      for (const w of w6) { const g = sums[w.group] != null ? w.group : "Other"; sums[g] += w.load; tot += w.load; }
+      if (tot > 0) {
+        const out = {};
+        for (const g of LP_GROUPS) out[g] = { load: Math.round(week.weeklyTarget * sums[g] / tot), sessions: null };
+        return { rows: out, source: "share" };
+      }
+    }
+    return null;
+  }, [tgt, effRates, server, week.weeklyTarget]);
+
+  // "Copy last week" preset data: actual sessions/hours per group.
+  const lastWeekActual = useMemo(() => {
+    if (!server || !server.workouts6m) return null;
+    const monPrev = lpAddDays(week.mon, -7);
+    const rows = {};
+    for (const g of LP_GROUPS) rows[g] = { sessions: 0, hours: 0, hard: 0, hardPct: 0, longRunH: 0 };
+    let any = false;
+    for (const w of server.workouts6m) {
+      if (w.date < monPrev || w.date >= week.mon) continue;
+      const g = rows[w.group] ? w.group : "Other";
+      const h = (w.duration_s || 0) / 3600;
+      if (h < 0.25) continue;
+      any = true;
+      rows[g].sessions++;
+      rows[g].hours += h;
+      if (!lpIsEasy(w)) rows[g].hard++;
+      if (g === "Run" && lpIsEasy(w)) rows[g].longRunH = Math.max(rows[g].longRunH, h);
+    }
+    if (!any) return null;
+    for (const g of LP_GROUPS) {
+      const r = rows[g];
+      r.hours = Math.round(r.hours * 4) / 4;
+      r.longRunH = Math.round(r.longRunH * 4) / 4;
+      r.hardPct = r.sessions ? Math.round(100 * r.hard / r.sessions / 5) * 5 : 0;
+      delete r.hard;
+    }
+    return rows;
+  }, [server, week.mon]);
+
+  // Mon–Sun strip. Future days: planned_workouts first, then distribute
+  // the remaining gap over unplanned days with a hard/easy alternation
+  // that respects the hard-sessions cap.
+  const stripDays = useMemo(() => {
+    const plannedByDate = new Map();
+    for (const p of (server && server.plannedThisWeek) || []) {
+      const cur = plannedByDate.get(p.date) || { load: 0, names: [], hard: 0 };
+      cur.load += p.planned_load || 0;
+      if (p.name) cur.names.push(p.name);
+      if ((p.intensity_band || "").toLowerCase() === "hard") cur.hard++;
+      plannedByDate.set(p.date, cur);
+    }
+    const out = [];
+    let plannedFutureSum = 0, plannedHard = 0;
+    const unplannedIdx = [];
+    for (let i = 0; i < 7; i++) {
+      const iso = lpAddDays(week.mon, i);
+      const isPastOrToday = i <= week.dayIdx;
+      if (isPastOrToday) {
+        const d = LP_BY_ISO.get(iso);
+        const dayWk = weekWorkouts.filter((w) => w.date === iso);
+        let label = "Rest";
+        if (dayWk.length) {
+          const main = dayWk.reduce((a, b) => (b.load > a.load ? b : a));
+          label = main.name && main.name.length <= 18 ? main.name : main.group;
+        } else if (d && d.loadTotal > 0) {
+          const g = lpDayGroups(d);
+          label = LP_GROUPS.reduce((a, b) => (g[b] > g[a] ? b : a));
+        }
+        out.push({ iso, wd: LP_WD[i], kind: "actual", load: d ? d.loadTotal : 0, label, isToday: i === week.dayIdx });
+      } else {
+        const p = plannedByDate.get(iso);
+        if (p && p.load > 0) {
+          plannedFutureSum += p.load;
+          plannedHard += p.hard;
+          out.push({ iso, wd: LP_WD[i], kind: "suggested", load: p.load, label: p.names[0] && p.names[0].length <= 18 ? p.names[0] : "Planned", isToday: false });
+        } else {
+          unplannedIdx.push(out.length);
+          out.push({ iso, wd: LP_WD[i], kind: "suggested", load: 0, label: "", isToday: false });
+        }
+      }
+    }
+    // Distribute what's left of the target across unplanned future days.
+    const remaining = Math.max(0, week.weeklyTarget - week.done - plannedFutureSum);
+    if (unplannedIdx.length && remaining > 0) {
+      let hardLeft = Math.max(0, hardCap - hardDone - plannedHard);
+      const weights = unplannedIdx.map((_, j) => {
+        const isHard = j % 2 === 0 && hardLeft > 0;
+        if (isHard) hardLeft--;
+        return { w: isHard ? 1.35 : 0.75, isHard };
+      });
+      const wSum = weights.reduce((s, x) => s + x.w, 0);
+      unplannedIdx.forEach((idx, j) => {
+        const v = Math.round(remaining * weights[j].w / wSum);
+        out[idx].load = v;
+        out[idx].label = v < 15 ? "Rest / easy" : weights[j].isHard ? "Hard day" : "Easy day";
+      });
+    } else if (unplannedIdx.length) {
+      unplannedIdx.forEach((idx) => { out[idx].label = "Rest / easy"; });
+    }
+    return out;
+  }, [server, week, weekWorkouts, hardCap, hardDone]);
+
+  // Ramp figures
+  const last = DAYS.length ? DAYS[DAYS.length - 1] : null;
+  const ctlNow = last && last.fitness != null ? last.fitness : null;
+  const ctl7 = DAYS.length > 7 ? DAYS[DAYS.length - 8].fitness : null;
+  const ctl28 = DAYS.length > 28 ? DAYS[DAYS.length - 29].fitness : null;
+  const ramp7 = ctlNow != null && ctl7 != null ? r1(ctlNow - ctl7) : null;
+  const ramp28 = ctlNow != null && ctl28 != null ? r1((ctlNow - ctl28) / 4) : null;
+  const daysToRace = raceDate ? lpDaysBetween(todayIso, raceDate) : null;
+  const raceUpcoming = daysToRace != null && daysToRace >= 0;
+  const projRaceCtl = raceUpcoming && ctlNow != null && ramp28 != null
+    ? Math.round(ctlNow + ramp28 * (daysToRace / 7)) : null;
+
+  const planToday = ((server && server.plannedThisWeek) || []).find((p) => p.date === todayIso) || null;
+
+  const lightCol = LP_LIGHT_COLOR()[light.light];
+  const statusPill = week.status === "over"
+    ? { text: "Over ceiling", c: C.red }
+    : week.status === "on" ? { text: "On pace", c: C.green } : { text: "Behind", c: C.amber };
+
+  const d0 = parseISO(week.mon), d6 = parseISO(lpAddDays(week.mon, 6));
+  const rangeStr = d0.getDate() + " " + MON[d0.getMonth()] + " – " + d6.getDate() + " " + MON[d6.getMonth()];
+  const todayD = parseISO(todayIso);
+  const subBits = [
+    todayD.getDate() + " " + MON[todayD.getMonth()] + " " + todayD.getFullYear(),
+    "Week " + lpIsoWeekNum(todayIso),
+    rangeStr,
+  ];
+  if (raceUpcoming) subBits.push((server.raceEvent || "Race") + " in " + daysToRace + " day" + (daysToRace === 1 ? "" : "s"));
+
+  const smallStat = (label, value, color) => html`<div style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10 }} className="px-3 py-2 flex-1 min-w-[86px]">
+    <div style=${{ color: C.muted, letterSpacing: "0.08em" }} className="text-[9px] font-semibold uppercase">${label}</div>
+    <div style=${{ color: color || C.text }} className="text-lg font-bold mt-0.5">${value}</div>
+  </div>`;
+
+  const grLine = (status, text, right) => html`<div className="flex items-start justify-between gap-3 py-2" style=${{ borderBottom: "1px solid " + C.grid }}>
+    <div className="flex items-start gap-2 min-w-0">
+      <span style=${{ color: STATUS_COLOR[status] || C.muted, fontSize: 9, marginTop: 3 }}>●</span>
+      <span style=${{ color: C.text }} className="text-xs leading-snug">${text}</span>
+    </div>
+    ${right != null ? html`<span style=${{ color: STATUS_COLOR[status] || C.muted }} className="text-xs font-bold shrink-0">${right}</span>` : null}
+  </div>`;
+
+  return html`<div>
+    <div className="flex items-start justify-between flex-wrap gap-3 mb-5">
+      <div>
+        <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Load Planner</div>
+        <h1 className="text-2xl font-bold mt-1">This Week</h1>
+        <div style=${{ color: C.muted }} className="text-xs mt-1">${subBits.join(" · ")}</div>
+      </div>
+      <div className="w-full sm:w-auto"><${LpRampChip} ramp=${ramp} onChange=${setRamp} /></div>
+    </div>
+
+    ${serverErr ? html`<div style=${{ color: C.muted, border: "1px solid " + C.border, borderRadius: 10 }} className="text-[11px] px-3 py-2 mb-4">
+      Planner data fetch failed (${serverErr}) — showing trends only; per-hour rates use defaults.
+    </div>` : null}
+
+    <${Card} title="Weekly load" sub=${"Target = 7 × (Monday CTL " + week.ctlMon.toFixed(0) + " + ramp " + (ramp > 0 ? "+" + ramp : ramp) + "). Red line = +" + PLANNER_CFG.ceilingRamp + " CTL/wk overreach ceiling."}
+      right=${html`<span style=${{ color: statusPill.c, border: "1px solid " + statusPill.c, borderRadius: 999 }} className="text-[11px] font-bold px-3 py-1">${statusPill.text}</span>`}>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <div className="flex items-baseline gap-2 mb-2">
+            <span className="text-3xl font-bold" style=${{ color: C.text }}>${week.done}</span>
+            <span style=${{ color: C.muted }} className="text-sm">/ ${week.weeklyTarget} target</span>
+            ${week.taper ? html`<span style=${{ color: C.violet, border: "1px solid " + C.violet + "66", borderRadius: 999 }} className="text-[10px] font-semibold px-2 py-0.5">Taper — target ×${week.taper.factor}</span>` : null}
+          </div>
+          <${LpBar} done=${week.done} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${week.pace} height=${18} fill=${week.done > week.ceiling ? C.red : C.cyan} />
+          <div className="flex justify-between mt-1 text-[9px]" style=${{ color: C.muted }}>
+            <span>0</span><span>pace ${Math.round(week.pace)}</span><span style=${{ color: C.red }}>ceiling ${week.ceiling}</span>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-3">
+            ${smallStat("To go", Math.max(0, week.weeklyTarget - week.done))}
+            ${smallStat("Days left", week.daysLeft)}
+            ${smallStat("Needed / day", Math.round(week.neededPerDay), C.cyan)}
+            ${smallStat("Last week", week.lastWeekTotal)}
+          </div>
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[10px] font-semibold uppercase">Split vs targets</span>
+            <button onClick=${() => setBuilderOpen(true)} style=${{ color: C.cyan, background: "transparent", border: "none", cursor: "pointer", padding: 0 }} className="text-[11px] font-semibold">Load Builder →</button>
+          </div>
+          ${groupTargets ? LP_GROUPS.filter((g) => g !== "Other" || week.doneByGroup.Other > 0 || (groupTargets.rows.Other && groupTargets.rows.Other.load > 0)).map((g) => {
+            const done = Math.round(week.doneByGroup[g]);
+            const t = groupTargets.rows[g] || { load: 0, sessions: null };
+            const fr = t.load > 0 ? Math.min(1, done / t.load) : 0;
+            return html`<div key=${g} className="mb-2.5">
+              <div className="flex items-center justify-between text-[11px] mb-1">
+                <span style=${{ color: C.text }} className="font-semibold">${g}</span>
+                <span style=${{ color: C.muted }}>${done} / ${t.load}${t.sessions != null ? " · " + (sessionsDone[g] || 0) + " of " + t.sessions + " sessions" : ""}</span>
+              </div>
+              <div style=${{ height: 7, background: C.bg, border: "1px solid " + C.border, borderRadius: 5, position: "relative" }}>
+                <div style=${{ position: "absolute", left: 0, top: 0, bottom: 0, width: (fr * 100) + "%", background: LP_GROUP_COLOR[g], borderRadius: 4, opacity: 0.9 }} />
+              </div>
+            </div>`;
+          }) : html`<div style=${{ color: C.muted }} className="text-xs">Set targets in the <button onClick=${() => setBuilderOpen(true)} style=${{ color: C.cyan, background: "none", border: "none", padding: 0, cursor: "pointer" }} className="font-semibold">Load Builder</button> to track your per-sport split.</div>`}
+          ${groupTargets && groupTargets.source === "share" ? html`<div style=${{ color: C.muted }} className="text-[10px] mt-1">No saved targets yet — using your 6-month per-sport share. <button onClick=${() => setBuilderOpen(true)} style=${{ color: C.cyan, background: "none", border: "none", padding: 0, cursor: "pointer" }}>Set targets</button></div>` : null}
+        </div>
+      </div>
+    <//>
+
+    <div style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + lightCol, borderRadius: 14 }} className="p-2.5 sm:p-5 mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-2">
+          <span style=${{ color: C.muted, letterSpacing: "0.13em" }} className="text-xs font-semibold uppercase">Today</span>
+          <span style=${{ color: lightCol, border: "1px solid " + lightCol, borderRadius: 999 }} className="text-[10px] font-bold px-2.5 py-0.5 uppercase">
+            ${light.light === "red" ? "Rest / mobility" : light.light === "amber" ? "Easy Z2 only" : "Clear to train"}
+          </span>
+        </div>
+        <div className="text-sm">
+          ${light.hi <= 0
+            ? html`<span style=${{ color: C.green }} className="font-semibold">Weekly target met — anything extra is bonus</span>`
+            : html`<span><span style=${{ color: C.muted }}>Suggested load </span><span style=${{ color: C.text }} className="font-bold">${light.lo}–${light.hi}</span></span>`}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        ${light.inputs.map((inp) => html`<div key=${inp.label} style=${{ background: C.bg, border: "1px solid " + C.border, borderLeft: "3px solid " + (STATUS_COLOR[inp.status] || C.muted), borderRadius: 8 }} className="px-2.5 py-2">
+          <div style=${{ color: C.muted }} className="text-[9px] font-semibold uppercase">${inp.label}</div>
+          <div style=${{ color: C.text }} className="text-sm font-bold mt-0.5">${inp.value}</div>
+        </div>`)}
+      </div>
+      ${planToday ? html`<div style=${{ color: C.muted }} className="text-xs mt-3">
+        Plan says: <span style=${{ color: C.text }} className="font-semibold">${planToday.name || planToday.sport || "workout"}</span>
+        ${planToday.planned_load ? html`<span> · ${planToday.planned_load} load</span>` : null}
+        ${planToday.planned_duration_s ? html`<span> · ${Math.round(planToday.planned_duration_s / 60)} min</span>` : null}
+      </div>` : null}
+    </div>
+
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-4">
+      <${Card} title="Ramp rate" sub="How fast fitness (CTL) is rising. 3–7 per week is a productive build; above 7 is overreach territory.">
+        <div className="flex items-baseline gap-2 mb-3">
+          <span className="text-3xl font-bold" style=${{ color: ramp7 != null && ramp7 > 7 ? C.red : ramp7 != null && ramp7 >= 3 ? C.green : C.text }}>${ramp7 != null ? (ramp7 > 0 ? "+" + ramp7 : ramp7) : "—"}</span>
+          <span style=${{ color: C.muted }} className="text-xs">CTL / wk (7d)</span>
+        </div>
+        <${LpRampBand} value=${ramp7} />
+        <div className="flex gap-2 mt-4">
+          ${smallStat("CTL now", ctlNow != null ? r1(ctlNow) : "—")}
+          ${smallStat("7d ago", ctl7 != null ? r1(ctl7) : "—")}
+          ${smallStat("28d ago", ctl28 != null ? r1(ctl28) : "—")}
+        </div>
+        <div style=${{ color: C.muted }} className="text-[11px] mt-3">
+          4-week avg ramp: <span style=${{ color: C.text }} className="font-semibold">${ramp28 != null ? (ramp28 > 0 ? "+" + ramp28 : ramp28) : "—"} / wk</span>
+          ${projRaceCtl != null ? html`<span> · at this rate, CTL ≈ <span style=${{ color: C.cyan }} className="font-semibold">${projRaceCtl}</span> on race day (${daysToRace} d)</span>` : null}
+        </div>
+      <//>
+
+      <${Card} title="Guardrails" sub="Injury-risk checks beyond the headline numbers.">
+        ${grLine(
+          guard.runAcwr == null ? "watch" : guard.runAcwr > 1.5 ? "bad" : guard.runAcwr >= 1.3 ? "watch" : "good",
+          guard.runAcwr == null ? "Run-only ACWR — not enough run history" :
+            "Run-only ACWR — run load is " + Math.abs(Math.round((guard.runAcwr - 1) * 100)) + "% " + (guard.runAcwr >= 1 ? "above" : "below") + " your 4-week average",
+          guard.runAcwr != null ? guard.runAcwr.toFixed(2) : "—")}
+        ${guard.acwrNow != null ? grLine(
+          guard.acwrIfHi > 1.5 ? "bad" : guard.acwrIfHi > 1.3 ? "watch" : "good",
+          "If you do " + light.hi + " load today, ACWR becomes " + guard.acwrIfHi.toFixed(2) +
+            (guard.loadTo13 > 0 ? " · crosses 1.3 at ~" + guard.loadTo13 + " load" : " · already at/above 1.3"),
+          guard.acwrNow.toFixed(2)) : null}
+        ${guard.monotony != null ? grLine(
+          guard.monotony > PLANNER_CFG.monotonyFlag ? "watch" : "good",
+          guard.monotony > PLANNER_CFG.monotonyFlag
+            ? "Monotony " + guard.monotony.toFixed(1) + " — daily loads too samey (Foster > 2.0 flags). Strain " + guard.strain + "; add a clearly easy or rest day."
+            : "Monotony healthy — good hard/easy variation this week",
+          guard.monotony.toFixed(1)) : null}
+        ${grLine(
+          builds >= PLANNER_CFG.maxBuildWeeks ? "watch" : "good",
+          builds >= PLANNER_CFG.maxBuildWeeks
+            ? builds + " consecutive build weeks — plan a recovery week (≈ −20%, target ~" + Math.round(week.lastWeekTotal * PLANNER_CFG.recoveryWeekCut) + ")"
+            : builds + " consecutive build week" + (builds === 1 ? "" : "s") + " — room to keep building",
+          builds)}
+        ${week.taper ? grLine("watch", "Taper window — " + week.taper.toRace + " days to race, weekly target auto-reduced ×" + week.taper.factor, null) : null}
+      <//>
+    </div>
+
+    <${Card} title="Week plan" sub="Solid = done. Dashed = suggested (planned workouts first, then the remaining target spread hard/easy across free days, respecting the hard-session cap).">
+      <${LpWeekStrip} days=${stripDays} />
+    <//>
+
+    <${Card} title="Weekly load ladder" sub="Last 9 weeks, coloured by build / hold / recovery vs the week before.">
+      <${LpLadder} rows=${ladderRows} currentTarget=${week.weeklyTarget} currentDone=${week.done} />
+      ${builds >= PLANNER_CFG.maxBuildWeeks ? html`<div style=${{ color: C.amber }} className="text-[11px] mt-2">
+        ${builds} build weeks in a row — schedule a recovery week soon (≈ −20% → target ~${Math.round(week.lastWeekTotal * PLANNER_CFG.recoveryWeekCut)}).
+      </div>` : null}
+    <//>
+
+    <${LoadBuilderModal}
+      open=${builderOpen}
+      onClose=${() => setBuilderOpen(false)}
+      isMobile=${isMobile}
+      calibrated=${calibrated}
+      week=${week}
+      lastWeekActual=${lastWeekActual}
+      savedTargets=${tgt}
+      onSaved=${(obj) => setTargets(obj)} />
+  </div>`;
+}
+
 // ---------- main ----------
 // ---------- Workout Library ----------
 // A filterable library of the 36 Bayens Method workouts. The whole UI is a
@@ -2632,7 +3765,7 @@ function App() {
   // is conditioned on the active tab so it doesn't show on Biomarkers.
   const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4 flex flex-wrap items-center justify-between" style=${{ borderBottom: "1px solid " + C.border }}>
     <div className="flex max-w-full overflow-x-auto" style=${{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
-      ${["Training", "Calendar", "Biomarkers", "Recommendations", "Workout Library"].map((t) => {
+      ${["Training", "Load Planner", "Calendar", "Biomarkers", "Recommendations", "Workout Library"].map((t) => {
         const on = t === tab;
         return html`<button key=${t} onClick=${() => setTab(t)}
           style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1, background: "transparent", whiteSpace: "nowrap", flexShrink: 0 }}
@@ -2684,6 +3817,8 @@ function App() {
     </div>` : null}
 
     ${TabBar}
+
+    ${tab === "Load Planner" ? html`<div className="max-w-7xl mx-auto"><${LoadPlannerView} /></div>` : null}
 
     ${tab === "Calendar" ? html`<div className="max-w-7xl mx-auto"><${CalendarView} /></div>` : null}
 
