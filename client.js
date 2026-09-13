@@ -3380,8 +3380,12 @@ function LoadPlannerView() {
           label = main.name && main.name.length <= 16 ? main.name : LP_GROUP_LABEL[main.group] || main.group;
           if (dayWk.length > 1) {
             const second = dayWk.filter((w) => w !== main).reduce((a, b) => (b.load > a.load ? b : a));
-            const s2 = LP_GROUP_LABEL[second.group] || second.group;
-            label = (LP_GROUP_LABEL[main.group] || main.group) + " + " + s2.toLowerCase();
+            // Two sessions of the same sport read silly as "Strength +
+            // strength" — only show the combo when the sports differ.
+            if (second.group !== main.group) {
+              const s2 = LP_GROUP_LABEL[second.group] || second.group;
+              label = (LP_GROUP_LABEL[main.group] || main.group) + " + " + s2.toLowerCase();
+            }
           }
         } else if (d && d.loadTotal > 0) {
           const g = lpDayGroups(d);
