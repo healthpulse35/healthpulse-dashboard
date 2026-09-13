@@ -2702,8 +2702,8 @@ function LpStepper({ value, step = 1, min = 0, max = 99, onChange, fmt, unit }) 
 // done; hatched fill = the remaining days' planned load ("target load" in
 // Kevin's terms — it lives ONLY on the bar, no text line). Markers: pace
 // (muted), target (text colour), ceiling (red, right edge).
-function LpBar({ done, planned = 0, target, ceiling, pace, height = 14, fill }) {
-  const scaleMax = Math.max(ceiling, done + planned, 1);
+function LpBar({ done, planned = 0, target, ceiling, pace, lastWeek, height = 14, fill }) {
+  const scaleMax = Math.max(ceiling, done + planned, lastWeek || 0, 1);
   const pct = (v) => Math.min(100, Math.max(0, (v / scaleMax) * 100));
   const col = fill || C.cyan;
   const hatch = "repeating-linear-gradient(45deg, " + col + " 0 4px, transparent 4px 8px)";
@@ -2711,12 +2711,21 @@ function LpBar({ done, planned = 0, target, ceiling, pace, height = 14, fill }) 
     position: "absolute", left: "min(" + pct(v) + "%, calc(100% - 2px))", top: -3, bottom: -3, width: w,
     background: color, borderRadius: 2, transform: "translateX(-50%)",
   }} />`;
-  return html`<div style=${{ position: "relative", height, background: C.bg, border: "1px solid " + C.border, borderRadius: 8 }}>
-    <div style=${{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(done) + "%", background: col, borderRadius: pct(done) >= 99 ? 7 : "7px 0 0 7px", opacity: 0.92, transition: "width .3s" }} />
-    ${planned > 0 ? html`<div style=${{ position: "absolute", left: pct(done) + "%", top: 0, bottom: 0, width: (pct(done + planned) - pct(done)) + "%", background: hatch, opacity: 0.8, transition: "width .3s" }} />` : null}
-    ${mark(pace, C.muted, 2)}
-    ${mark(target, C.text, 2)}
-    ${mark(ceiling, C.red, 3)}
+  // Last-week marker: a violet tick sitting slightly proud of the bar with
+  // a small "last wk N" flag above it, so the comparison reads at a glance.
+  const lwPct = lastWeek != null ? pct(lastWeek) : null;
+  return html`<div style=${{ position: "relative" }}>
+    ${lastWeek != null ? html`<div style=${{ position: "absolute", left: "min(" + lwPct + "%, calc(100% - 30px))", bottom: "calc(100% + 3px)", transform: "translateX(-50%)", whiteSpace: "nowrap" }}>
+      <span style=${{ color: C.violet }} className="text-[10px] font-semibold">last wk ${lastWeek}</span>
+    </div>` : null}
+    <div style=${{ position: "relative", height, background: C.bg, border: "1px solid " + C.border, borderRadius: 8 }}>
+      <div style=${{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(done) + "%", background: col, borderRadius: pct(done) >= 99 ? 7 : "7px 0 0 7px", opacity: 0.92, transition: "width .3s" }} />
+      ${planned > 0 ? html`<div style=${{ position: "absolute", left: pct(done) + "%", top: 0, bottom: 0, width: (pct(done + planned) - pct(done)) + "%", background: hatch, opacity: 0.8, transition: "width .3s" }} />` : null}
+      ${lastWeek != null ? html`<div style=${{ position: "absolute", left: "min(" + lwPct + "%, calc(100% - 2px))", top: -4, bottom: -4, width: 2, background: C.violet, borderRadius: 2, transform: "translateX(-50%)" }} />` : null}
+      ${mark(pace, C.muted, 2)}
+      ${mark(target, C.text, 2)}
+      ${mark(ceiling, C.red, 3)}
+    </div>
   </div>`;
 }
 
@@ -3687,8 +3696,8 @@ function LoadPlannerView() {
             </span>
             ${week.taper ? html`<span style=${{ color: C.violet, border: "1px solid " + C.violet + "66", borderRadius: 999 }} className="text-[10px] font-semibold px-2 py-0.5">Taper ×${week.taper.factor}</span>` : null}
           </div>
-          <div className="mt-3">
-            <${LpBar} done=${week.done} planned=${strip.plannedTotal} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${week.pace} height=${16} fill=${week.done > week.ceiling ? C.red : C.cyan} />
+          <div className="mt-6">
+            <${LpBar} done=${week.done} planned=${strip.plannedTotal} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${week.pace} lastWeek=${week.lastWeekTotal} height=${16} fill=${week.done > week.ceiling ? C.red : C.cyan} />
             <div className="flex justify-between mt-1 text-[10px]" style=${{ color: C.muted }}>
               <span>0</span>
               <span>pace ${Math.round(week.pace)}</span>
@@ -3698,10 +3707,8 @@ function LoadPlannerView() {
             <div className="hidden sm:flex items-center gap-4 mt-2 text-[10px]" style=${{ color: C.muted }}>
               <span className="flex items-center gap-1.5"><span style=${{ width: 9, height: 9, borderRadius: 2, background: C.cyan, display: "inline-block" }} />Done</span>
               <span className="flex items-center gap-1.5">${lpHatchSwatch(C.cyan)}Planned (remaining days)</span>
+              <span className="flex items-center gap-1.5"><span style=${{ width: 2, height: 11, background: C.violet, display: "inline-block", borderRadius: 2 }} />Last week (${week.lastWeekTotal})</span>
             </div>
-          </div>
-          <div className="mt-4">
-            ${heroStat("Last week", week.lastWeekTotal)}
           </div>
         </div>
         <div style=${isMobile ? {} : { borderLeft: "1px solid " + C.border, paddingLeft: 20 }}>
