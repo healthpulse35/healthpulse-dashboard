@@ -24,6 +24,8 @@ import {
   Gauge as IconGauge, MapPin as IconMap, Activity as IconActivity,
   CheckCircle2 as IconCheck, CalendarClock as IconPlanned, Target as IconTarget,
   ChevronDown as IconChevronDown, RefreshCw as IconRefresh,
+  Pencil as IconPencil, Settings as IconSettings, ChevronRight as IconChevronRight,
+  Minus as IconMinus, Plus as IconPlus,
 } from "https://esm.sh/lucide-react@0.460.0?deps=react@18.3.1";
 
 const html = htm.bind(React.createElement);
@@ -2480,22 +2482,61 @@ function lpTodayLight(todayIso, neededPerDay) {
   if (light === "red") { lo = 0; hi = cfg.redCapLoad; }
   else if (light === "amber") { hi = Math.round(neededPerDay * cfg.amberCapFactor); lo = Math.min(lo, hi); }
 
-  const st = (v, bad, warn, dir) => {
-    if (v == null) return "watch";
-    if (dir === "lowBad") return v < bad ? "bad" : v < warn ? "watch" : "good";
-    return v > bad ? "bad" : v > warn ? "watch" : "good";
-  };
+  // Per-metric status word + colour for the input rows (mockup shows
+  // "−16 · optimal", "62 ms · near baseline" etc).
   const inputs = [
-    { label: "Form (TSB)", value: tsb != null ? r1(tsb) : "—",
-      status: tsb == null ? "watch" : tsb < cfg.redTsb ? "bad" : tsb <= cfg.amberTsbHi ? "watch" : "good" },
-    { label: "ACWR", value: acwr != null ? acwr.toFixed(2) : "—",
-      status: st(acwr, cfg.redAcwr, cfg.amberAcwr - 0.001, "highBad") },
-    { label: "HRV", value: hrvInfo ? hrvInfo.value + " ms" : "—",
-      status: hrvInfo ? hrvInfo.status : "watch" },
-    { label: "Sleep", value: sleep != null ? sleep.toFixed(1) + " h" : "—",
-      status: st(sleep, cfg.redSleep, cfg.amberSleep, "lowBad") },
+    (() => {
+      let word = "no data", status = "watch";
+      if (tsb != null) {
+        if (tsb < cfg.redTsb) { word = "high risk"; status = "bad"; }
+        else if (tsb <= cfg.amberTsbHi) { word = "heavy"; status = "watch"; }
+        else if (tsb <= 5) { word = "optimal"; status = "good"; }
+        else { word = "fresh"; status = "good"; }
+      }
+      return { label: "Form (TSB)", value: tsb != null ? String(r1(tsb)) : "—", word, status };
+    })(),
+    (() => {
+      let word = "no data", status = "watch";
+      if (acwr != null) {
+        if (acwr > cfg.redAcwr) { word = "high"; status = "bad"; }
+        else if (acwr >= cfg.amberAcwr) { word = "elevated"; status = "watch"; }
+        else if (acwr >= 0.8) { word = "optimal"; status = "good"; }
+        else { word = "low"; status = "watch"; }
+      }
+      return { label: "ACWR (all sports)", value: acwr != null ? acwr.toFixed(2) : "—", word, status };
+    })(),
+    {
+      label: "HRV last night",
+      value: hrvInfo ? hrvInfo.value + " ms" : "—",
+      word: hrvInfo ? (hrvInfo.status === "good" ? "near baseline" : hrvInfo.label.toLowerCase()) : "no data",
+      status: hrvInfo ? hrvInfo.status : "watch",
+    },
+    (() => {
+      let word = "no data", status = "watch";
+      if (sleep != null) {
+        if (sleep < cfg.redSleep) { word = "bad"; status = "bad"; }
+        else if (sleep < cfg.amberSleep) { word = "short"; status = "watch"; }
+        else if (sleep < 7) { word = "ok"; status = "watch"; }
+        else { word = "good"; status = "good"; }
+      }
+      const h = sleep != null ? Math.floor(sleep) : 0;
+      const m = sleep != null ? Math.round((sleep - h) * 60) : 0;
+      return { label: "Sleep", value: sleep != null ? h + " h " + String(m).padStart(2, "0") : "—", word, status };
+    })(),
   ];
-  return { light, lo, hi, inputs };
+  const headline = light === "red" ? "Red light — rest / mobility only"
+    : light === "amber" ? "Caution — easy Z2 only"
+    : "Green light — quality session OK";
+  return { light, lo, hi, inputs, headline };
+}
+
+// Classify the 7-day ramp for the Ramp Rate card headline.
+function lpRampClass(v) {
+  if (v == null) return { word: "No data", color: C.muted };
+  if (v > 7) return { word: "Too hot", color: C.red };
+  if (v >= 3) return { word: "Productive build", color: C.green };
+  if (v >= 0) return { word: "Holding", color: C.muted };
+  return { word: "Declining", color: C.muted };
 }
 
 // Weekly totals for the ladder + build/hold/recovery classification.
@@ -2628,54 +2669,71 @@ function lpToken() {
 }
 const LP_API = "https://ptisuvfdufngdfxfrzvn.supabase.co/functions/v1/dashboard?resource=planner&token=";
 
-// -- small UI atoms --
+const LP_GROUP_LABEL = { Run: "Run", Strength: "Strength", "Erg-Bike": "Erg / Bike", Other: "Other" };
+const LP_WD_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-function LpStepper({ value, step = 1, min = 0, max = 99, onChange, fmt }) {
-  const btn = (txt, fn, dis) => html`<button onClick=${fn} disabled=${dis}
-    style=${{ width: 26, height: 26, borderRadius: 7, border: "1px solid " + C.border, background: "transparent", color: dis ? C.border : C.text, cursor: dis ? "default" : "pointer", lineHeight: 1, flexShrink: 0 }}
-    className="text-sm font-bold">${txt}</button>`;
-  return html`<div className="inline-flex items-center gap-1" style=${{ minWidth: 92 }}>
-    ${btn("−", () => onChange(+Math.max(min, value - step).toFixed(2)), value <= min)}
-    <span className="text-sm font-semibold text-center" style=${{ color: C.text, flex: 1, minWidth: 34 }}>${fmt ? fmt(value) : value}</span>
-    ${btn("+", () => onChange(+Math.min(max, value + step).toFixed(2)), value >= max)}
+// -- small UI atoms (styling mirrors load-planner-mockups/*.html) --
+
+const lpCard = (extra) => ({ background: C.card, border: "1px solid " + C.border, borderRadius: 14, ...(extra || {}) });
+
+const LpTitle = ({ label, right }) => html`<div className="flex items-center justify-between gap-2 mb-3">
+  <span style=${{ color: C.muted, letterSpacing: "0.13em" }} className="text-[11px] font-semibold uppercase">${label}</span>
+  ${right || null}
+</div>`;
+
+const LpDot = ({ color, size = 8 }) =>
+  html`<span style=${{ width: size, height: size, borderRadius: 3, background: color, flexShrink: 0, display: "inline-block" }} />`;
+
+// Bordered [− value +] stepper. Buttons grow to 44px tap targets on mobile.
+function LpStepper({ value, step = 1, min = 0, max = 99, onChange, fmt, unit }) {
+  const btn = (Icon, fn, dis) => html`<button onClick=${fn} disabled=${dis}
+    style=${{ background: "transparent", border: "none", color: dis ? C.border : C.muted, cursor: dis ? "default" : "pointer" }}
+    className="w-11 h-11 sm:w-8 sm:h-8 flex items-center justify-center shrink-0"><${Icon} size=${14} /></button>`;
+  return html`<div className="inline-flex items-center" style=${{ border: "1px solid " + C.border, borderRadius: 9, background: C.bg }}>
+    ${btn(IconMinus, () => onChange(+Math.max(min, value - step).toFixed(2)), value <= min)}
+    <span className="text-sm font-semibold text-center" style=${{ color: C.text, minWidth: 34 }}>
+      ${fmt ? fmt(value) : value}${unit ? html`<span style=${{ color: C.muted }} className="text-[10px] font-normal"> ${unit}</span>` : null}
+    </span>
+    ${btn(IconPlus, () => onChange(+Math.min(max, value + step).toFixed(2)), value >= max)}
   </div>`;
 }
 
-// Progress bar with pace line + target tick + red ceiling marker. The
-// scale runs a touch past the ceiling so the red line always paints.
-function LpBar({ done, target, ceiling, pace, height = 16, fill }) {
-  const scaleMax = Math.max(ceiling * 1.05, done * 1.05, target * 1.05, 1);
+// Progress bar with optional pace line (thin light) + red ceiling marker.
+function LpBar({ done, target, ceiling, pace, height = 14, fill }) {
+  const scaleMax = Math.max(ceiling * 1.04, done * 1.05, target * 1.05, 1);
   const pct = (v) => Math.min(100, Math.max(0, (v / scaleMax) * 100));
-  const mark = (v, color, dashed, label) => v == null ? null : html`<div style=${{
-      position: "absolute", left: pct(v) + "%", top: -3, bottom: -3, width: 0,
-      borderLeft: (dashed ? "2px dashed " : "2px solid ") + color, transform: "translateX(-1px)",
-    }} title=${label} />`;
+  const mark = (v, color, w) => v == null ? null : html`<div style=${{
+    position: "absolute", left: pct(v) + "%", top: -3, bottom: -3, width: w,
+    background: color, borderRadius: 2, transform: "translateX(-50%)",
+  }} />`;
   return html`<div style=${{ position: "relative", height, background: C.bg, border: "1px solid " + C.border, borderRadius: 8 }}>
-    <div style=${{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(done) + "%", background: fill || C.cyan, borderRadius: 7, opacity: 0.9, transition: "width .3s" }} />
-    ${mark(pace, C.text, true, "Pace — where you should be by today")}
-    ${mark(target, C.green, false, "Weekly target")}
-    ${mark(ceiling, C.red, false, "Ceiling — overreach above this")}
+    <div style=${{ position: "absolute", left: 0, top: 0, bottom: 0, width: pct(done) + "%", background: fill || C.cyan, borderRadius: 7, opacity: 0.92, transition: "width .3s" }} />
+    ${mark(pace, C.text + "88", 2)}
+    ${mark(target, C.muted, 2)}
+    ${mark(ceiling, C.red, 3)}
   </div>`;
 }
 
-// Target-ramp chip + popover. Hidden-by-default selector per Kevin's spec:
-// the chip shows the current ramp, the option list only appears on click.
+// Target-ramp chip + hidden-by-default popover (Kevin's spec: no permanent selector).
 function LpRampChip({ ramp, onChange }) {
   const [open, setOpen] = useState(false);
-  const opt = PLANNER_CFG.rampOptions.find((o) => o.v === ramp);
   return html`<div style=${{ position: "relative" }}>
     <button onClick=${() => setOpen((o) => !o)}
-      style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: 999, color: C.text, minHeight: 40 }}
-      className="px-4 py-2 text-xs font-semibold flex items-center gap-2 w-full sm:w-auto justify-center">
-      <span style=${{ color: C.muted }}>Target ramp</span>
-      <span style=${{ color: C.cyan }}>${ramp > 0 ? "+" + ramp : ramp} CTL / wk</span>
-      <span style=${{ color: C.muted }}>· ${open ? "Close" : "Change"}</span>
+      style=${{ ...lpCard({ borderRadius: 12 }), minHeight: 44, cursor: "pointer" }}
+      className="px-4 py-2 flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
+      <span className="flex items-center gap-3">
+        <span style=${{ color: C.muted, letterSpacing: "0.12em" }} className="text-[10px] font-semibold uppercase">Target ramp</span>
+        <span style=${{ color: C.cyan }} className="text-sm font-bold">${ramp > 0 ? "+" + ramp : ramp} CTL / wk</span>
+      </span>
+      <span style=${{ color: C.muted }} className="text-xs font-semibold flex items-center gap-1">
+        <${IconSettings} size=${13} /> Change
+      </span>
     </button>
-    ${open ? html`<div style=${{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 40, background: C.card, border: "1px solid " + C.border, borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,0.45)", minWidth: 190 }} className="p-1.5">
+    ${open ? html`<div style=${{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 40, ...lpCard({ borderRadius: 12 }), boxShadow: "0 10px 30px rgba(0,0,0,0.45)", minWidth: 200 }} className="p-1.5">
       ${PLANNER_CFG.rampOptions.map((o) => {
         const on = o.v === ramp;
         return html`<button key=${o.v} onClick=${() => { onChange(o.v); setOpen(false); }}
-          style=${{ color: on ? C.cyan : C.text, background: on ? C.cyan + "14" : "transparent", borderRadius: 8, border: "none", cursor: "pointer" }}
+          style=${{ color: on ? C.cyan : C.text, background: on ? C.cyan + "14" : "transparent", borderRadius: 8, border: "none", cursor: "pointer", minHeight: 40 }}
           className="w-full text-left px-3 py-2 text-xs font-semibold flex items-center justify-between">
           <span>${o.label}</span>
           <span style=${{ color: on ? C.cyan : C.muted }}>${o.v > 0 ? "+" + o.v : o.v}</span>
@@ -2688,75 +2746,146 @@ function LpRampChip({ ramp, onChange }) {
   </div>`;
 }
 
-// Mon–Sun strip: solid bars for what happened, dashed outlines for what's
-// suggested. Today's column gets a subtle cyan wash.
-function LpWeekStrip({ days }) {
+// Interactive easy/hard mix bar (green/red segments; the invisible range
+// input on top makes the split draggable — value tracks the easy share so
+// the boundary follows the cursor).
+function LpMixBar({ hardPct, onChange, single, capLeft, capRight }) {
+  const easy = 100 - (hardPct || 0);
+  return html`<div className="w-full">
+    <div style=${{ position: "relative", height: 10, borderRadius: 5, overflow: "hidden", display: "flex", background: C.bg }}>
+      ${single
+        ? html`<div style=${{ width: "100%", background: "#5b6b82", opacity: 0.55 }} />`
+        : [
+            html`<div key="e" style=${{ width: easy + "%", background: "#4ade80" }} />`,
+            html`<div key="h" style=${{ width: (hardPct || 0) + "%", background: "#f87171" }} />`,
+          ]}
+      ${!single && onChange ? html`<input type="range" min="40" max="100" step="5" value=${easy}
+        onInput=${(e) => onChange(100 - +e.target.value)}
+        aria-label="Easy / hard split"
+        style=${{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "ew-resize", margin: 0 }} />` : null}
+    </div>
+    <div className="flex justify-between gap-2 mt-1 text-[10px]" style=${{ color: C.muted }}>
+      <span>${capLeft}</span>
+      ${capRight ? html`<span className="text-right">${capRight}</span>` : null}
+    </div>
+  </div>`;
+}
+
+// Mon–Sun strip: solid bars = done, dashed outlines = suggested. Today's
+// column gets a wash + "· today" header. On mobile the per-day session
+// labels collapse into a single footer line.
+function LpWeekStrip({ days, isMobile }) {
   const maxLoad = Math.max(30, ...days.map((d) => d.load || 0));
-  const BAR_H = 92;
-  return html`<div className="grid grid-cols-7 gap-1 sm:gap-2">
-    ${days.map((d) => {
-      const hpx = Math.max(d.load > 0 ? 6 : 3, Math.round((Math.min(d.load, maxLoad) / maxLoad) * BAR_H));
-      const rest = !d.load;
-      return html`<div key=${d.iso} className="flex flex-col items-center rounded-lg px-0.5 pt-1.5 pb-1"
-        style=${{ background: d.isToday ? "rgba(45,212,238,0.06)" : "transparent" }}>
-        <div style=${{ color: d.isToday ? C.cyan : C.muted }} className="text-[10px] font-semibold mb-1">${d.wd}</div>
-        <div style=${{ height: BAR_H }} className="w-full flex items-end justify-center">
-          <div style=${d.kind === "suggested"
-            ? { width: "70%", height: hpx, border: "1.5px dashed " + C.cyan, background: C.cyan + "0d", borderRadius: 5 }
-            : { width: "70%", height: hpx, background: rest ? C.border : C.cyan, borderRadius: 5, opacity: rest ? 0.7 : 0.92 }} />
+  const BAR_H = isMobile ? 88 : 118;
+  const px = (v, rest) => Math.max(rest ? 4 : 6, Math.round((Math.min(v, maxLoad) / maxLoad) * BAR_H));
+  const footerBits = [];
+  if (isMobile) {
+    const today = days.find((d) => d.isToday);
+    if (today && today.label) footerBits.push(html`<span key="t">Today: <b style=${{ color: C.text }}>${today.label}</b></span>`);
+    for (const d of days) {
+      if (!d.isToday && d.kind === "suggested" && d.label && d.label !== "Rest / easy") {
+        footerBits.push(html`<span key=${d.iso}>${d.wd}: <b style=${{ color: C.text }}>${d.label}</b></span>`);
+      }
+    }
+  }
+  return html`<div>
+    <div className="grid grid-cols-7 gap-1 sm:gap-2">
+      ${days.map((d) => {
+        const rest = d.kind === "actual" && !d.load;
+        const hpx = px(d.load || 0, rest);
+        return html`<div key=${d.iso} className="flex flex-col items-center rounded-lg px-0.5 pt-1.5 pb-1"
+          style=${{ background: d.isToday ? "rgba(45,212,238,0.06)" : "transparent" }}>
+          <div style=${{ color: d.isToday ? C.cyan : C.muted }} className="text-[10px] font-semibold mb-1 text-center leading-tight">
+            ${isMobile ? "" : d.wd + " " + d.dom}${!isMobile && d.isToday ? " · today" : ""}${isMobile ? " " : ""}
+          </div>
+          <div style=${{ height: BAR_H }} className="w-full flex items-end justify-center">
+            ${d.kind === "suggested"
+              ? html`<div style=${{ width: "72%", height: Math.max(hpx, 26), border: "1.5px dashed " + C.muted, background: "transparent", borderRadius: 6 }} />`
+              : html`<div style=${{ width: "72%", height: hpx, background: rest ? C.border : C.cyan, borderRadius: 6, opacity: rest ? 0.7 : 0.92 }} />`}
+          </div>
+          <div style=${{ color: d.kind === "suggested" ? C.muted : C.text }} className="text-sm font-bold mt-1.5">
+            ${d.kind === "suggested" ? (d.load ? "~" + Math.round(d.load) : "—") : Math.round(d.load || 0)}
+          </div>
+          ${isMobile
+            ? html`<div style=${{ color: d.isToday ? C.cyan : C.muted }} className=${"text-[10px] mt-0.5" + (d.isToday ? " font-bold" : "")}>${d.wd}</div>`
+            : html`<div style=${{ color: C.muted, minHeight: 26, lineHeight: 1.2 }} className="text-[10px] text-center mt-0.5 px-0.5 break-words w-full">${d.label}</div>`}
+        </div>`;
+      })}
+    </div>
+    ${footerBits.length ? html`<div style=${{ color: C.muted, borderTop: "1px solid " + C.grid }} className="text-[11px] mt-2 pt-2 flex flex-wrap gap-x-3 gap-y-1">${footerBits}</div>` : null}
+  </div>`;
+}
+
+// 9-week ladder. Completed weeks are solid, coloured by build / hold /
+// recovery. The current week is a highlighted column: dashed outline up to
+// the target with a solid fill for what's done. CTL at week end sits above
+// each bar (no dual axis — the number is enough).
+function LpLadder({ rows, currentTarget, currentDone, isMobile }) {
+  const LADDER_CLS_COLOR = { build: C.cyan, hold: "#5b6b82", recovery: C.violet };
+  const maxV = Math.max(1, currentTarget || 0, currentDone || 0, ...rows.map((r) => r.total));
+  const BAR_H = isMobile ? 90 : 130;
+  const px = (v) => Math.max(4, Math.round((Math.min(v, maxV) / maxV) * BAR_H));
+  return html`<div className="grid gap-1 sm:gap-2" style=${{ gridTemplateColumns: "repeat(" + rows.length + ", minmax(0,1fr))" }}>
+    ${rows.map((r) => {
+      const col = LADDER_CLS_COLOR[r.cls] || C.muted;
+      const ctlLabel = r.ctlEnd != null ? Math.round(r.ctlEnd) : "";
+      return html`<div key=${r.mon} className="flex flex-col items-center rounded-lg pt-1 pb-1"
+        style=${{ background: r.isCurrent ? "rgba(45,212,238,0.06)" : "transparent" }}>
+        <div style=${{ color: r.isCurrent ? C.cyan : C.muted }} className="text-[9px] font-semibold mb-1 whitespace-nowrap">
+          ${ctlLabel !== "" ? html`<span><span className="hidden sm:inline">CTL </span>${ctlLabel}${r.isCurrent ? " →" : ""}</span>` : " "}
         </div>
-        <div style=${{ color: C.text }} className="text-[11px] font-bold mt-1">${d.load ? Math.round(d.load) : "—"}</div>
-        <div style=${{ color: C.muted, minHeight: 24, lineHeight: 1.15 }} className="text-[9px] text-center mt-0.5 px-0.5 break-words w-full">${d.label}</div>
+        <div style=${{ height: BAR_H }} className="w-full flex items-end justify-center">
+          ${r.isCurrent
+            ? html`<div style=${{ width: "72%", height: px(Math.max(currentTarget, currentDone)), border: "1.5px dashed " + C.cyan, borderRadius: 6, position: "relative", overflow: "hidden" }}>
+                <div style=${{ position: "absolute", left: 0, right: 0, bottom: 0, height: (100 * Math.min(1, currentDone / Math.max(1, currentTarget, currentDone))) + "%", background: C.cyan, opacity: 0.85 }} />
+              </div>`
+            : html`<div style=${{ width: "72%", height: px(r.total), background: col, borderRadius: 6, opacity: 0.9 }} />`}
+        </div>
+        <div style=${{ color: C.text }} className="text-[11px] font-bold mt-1 text-center whitespace-nowrap hidden sm:block">
+          ${r.isCurrent ? html`<span>${Math.round(currentDone)}<span style=${{ color: C.muted }} className="font-normal"> / ${Math.round(currentTarget)}</span></span>` : r.total}
+        </div>
+        <div style=${{ color: r.isCurrent ? C.cyan : C.muted }} className=${"text-[9px] mt-0.5" + (r.isCurrent ? " font-bold" : " hidden sm:block")}>
+          ${r.isCurrent ? (isMobile ? "now" : "W" + r.week + " · now") : "W" + r.week}
+        </div>
       </div>`;
     })}
   </div>`;
 }
 
-// Weekly-load ladder: one bar per ISO week, coloured by the build / hold /
-// recovery classification. The current week renders as a dashed outline at
-// target height with a solid fill for what's done so far. CTL at week end
-// sits above each bar (no dual-axis line — the number is enough).
-function LpLadder({ rows, currentTarget, currentDone }) {
-  const LADDER_CLS_COLOR = { build: C.cyan, hold: "#5b6b82", recovery: C.violet };
-  const maxV = Math.max(1, currentTarget || 0, ...rows.map((r) => r.total));
-  const BAR_H = 130;
-  const px = (v) => Math.max(3, Math.round((Math.min(v, maxV) / maxV) * BAR_H));
+// Legend chips used by the week-plan and ladder card headers.
+const LpLegend = ({ items }) => html`<div className="hidden sm:flex items-center gap-3 text-[10px]" style=${{ color: C.muted }}>
+  ${items.map(([swatch, label]) => html`<span key=${label} className="flex items-center gap-1.5">${swatch}${label}</span>`)}
+</div>`;
+
+// Ramp-rate band: < 0 declining · 0–3 hold · 3–7 productive build · > 7 danger.
+function LpRampBand({ value }) {
+  const min = -3, max = 10;
+  const pct = (v) => ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * 100;
+  const segs = [
+    { a: -3, b: 0, c: C.muted, op: 0.35 },
+    { a: 0, b: 3, c: "#5b6b82", op: 0.8 },
+    { a: 3, b: 7, c: C.green, op: 0.8 },
+    { a: 7, b: 10, c: C.red, op: 0.8 },
+  ];
   return html`<div>
-    <div className="grid gap-1 sm:gap-2" style=${{ gridTemplateColumns: "repeat(" + rows.length + ", minmax(0,1fr))" }}>
-      ${rows.map((r) => {
-        const col = LADDER_CLS_COLOR[r.cls] || C.muted;
-        return html`<div key=${r.mon} className="flex flex-col items-center">
-          <div style=${{ color: C.muted }} className="text-[9px] font-semibold mb-1">${r.ctlEnd != null ? Math.round(r.ctlEnd) : ""}</div>
-          <div style=${{ height: BAR_H }} className="w-full flex items-end justify-center">
-            ${r.isCurrent
-              ? html`<div style=${{ width: "72%", height: px(Math.max(currentTarget, currentDone)), border: "1.5px dashed " + C.cyan, borderRadius: 6, position: "relative", overflow: "hidden" }}>
-                  <div style=${{ position: "absolute", left: 0, right: 0, bottom: 0, height: (100 * Math.min(1, currentDone / Math.max(1, Math.max(currentTarget, currentDone)))) + "%", background: C.cyan, opacity: 0.85 }} />
-                </div>`
-              : html`<div style=${{ width: "72%", height: px(r.total), background: col, borderRadius: 6, opacity: 0.9 }} />`}
-          </div>
-          <div style=${{ color: C.text }} className="text-[10px] font-bold mt-1 text-center">
-            ${r.isCurrent ? Math.round(currentDone) + " / " + Math.round(currentTarget) : r.total}
-          </div>
-          <div style=${{ color: r.isCurrent ? C.cyan : C.muted }} className="text-[9px] mt-0.5">W${r.week}</div>
-        </div>`;
-      })}
+    <div style=${{ position: "relative", height: 10, borderRadius: 6 }} className="flex">
+      ${segs.map((s, i) => html`<div key=${i} style=${{ width: (pct(s.b) - pct(s.a)) + "%", background: s.c, opacity: s.op, borderRadius: i === 0 ? "6px 0 0 6px" : i === segs.length - 1 ? "0 6px 6px 0" : 0 }} />`)}
+      ${value != null ? html`<div style=${{ position: "absolute", left: pct(value) + "%", top: -3, width: 3, height: 16, background: "#fff", borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.5)", transform: "translateX(-50%)" }} />` : null}
     </div>
-    <div className="flex flex-wrap gap-3 mt-3 text-[10px]" style=${{ color: C.muted }}>
-      <span><span style=${{ color: C.cyan }}>■</span> Build (> +5%)</span>
-      <span><span style=${{ color: "#5b6b82" }}>■</span> Hold (±5%)</span>
-      <span><span style=${{ color: C.violet }}>■</span> Recovery (${"<"} −10%)</span>
-      <span><span style=${{ color: C.muted }}>▢</span> This week (fill = done so far) · number above = CTL at week end</span>
+    <div className="flex justify-between mt-1 text-[9px]" style=${{ color: C.muted }}>
+      <span>${"<"} 0 declining</span><span>0–3 hold</span><span>3–7 build</span><span>${">"} 7 danger</span>
     </div>
   </div>`;
 }
 
-// -- Load Builder modal --
-// Sets this week's per-sport targets from HOURS, not from a recent average
-// (Kevin is returning from illness — a 4-week average would sandbag him).
+// -- Load Builder --
+// Sets the week's per-sport targets from HOURS (Kevin is returning from
+// illness — a recent average would sandbag him). Desktop: centered modal
+// with a table layout. Mobile: full-screen sheet with stacked cards.
 const LP_PRESET_STD = {
-  Run: { sessions: 4, hours: 3.5, hardPct: 30, longRunH: 1.25 },
+  Run: { sessions: 4, hours: 3.5, hardPct: 30, longRunH: 1.5 },
   Strength: { sessions: 3, hours: 3.0, hardPct: 0, longRunH: 0 },
-  "Erg-Bike": { sessions: 2, hours: 2.0, hardPct: 30, longRunH: 0 },
+  "Erg-Bike": { sessions: 2, hours: 2.0, hardPct: 50, longRunH: 0 },
   Other: { sessions: 1, hours: 0.5, hardPct: 0, longRunH: 0 },
 };
 function lpScalePreset(base, f) {
@@ -2778,36 +2907,41 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, lastWeekA
   const [hardCap, setHardCap] = useState(PLANNER_CFG.hardCapDefault);
   const [rates, setRates] = useState(PLANNER_CFG.defaultRates);
   const [editRates, setEditRates] = useState(false);
+  const [preset, setPreset] = useState(null);
   const [saveMsg, setSaveMsg] = useState(null); // {ok, text}
 
-  // (Re)initialise whenever the modal opens: saved targets for this ISO
-  // week win, otherwise the Standard-build preset + calibrated rates.
+  // (Re)initialise on open: this week's saved targets win, else the
+  // Standard-build preset priced with the calibrated rates.
   React.useEffect(() => {
     if (!open) return;
     setSaveMsg(null);
+    setEditRates(false);
     if (savedTargets && savedTargets.isoWeek === week.isoWeek && savedTargets.rows) {
       setRows({ ...LP_PRESET_STD, ...savedTargets.rows });
       setHardCap(savedTargets.hardCap ?? PLANNER_CFG.hardCapDefault);
       setRates({ ...(calibrated?.rates || PLANNER_CFG.defaultRates), ...(savedTargets.rates || {}) });
+      setPreset(null);
     } else {
       setRows(LP_PRESET_STD);
       setHardCap(PLANNER_CFG.hardCapDefault);
       setRates(calibrated?.rates || PLANNER_CFG.defaultRates);
+      setPreset("std");
     }
   }, [open]);
 
   if (!open) return null;
 
-  const setRow = (g, patch) => setRows((r) => ({ ...r, [g]: { ...r[g], ...patch } }));
+  const setRow = (g, patch) => { setPreset(null); setRows((r) => ({ ...r, [g]: { ...r[g], ...patch } })); };
   const applyPreset = (name) => {
     setSaveMsg(null);
+    setPreset(name);
     if (name === "std") setRows(LP_PRESET_STD);
     else if (name === "illness") setRows(lpScalePreset(LP_PRESET_STD, 0.7));
     else if (name === "recovery") setRows(lpScalePreset(LP_PRESET_STD, 0.8));
     else if (name === "race") {
       const r = lpScalePreset(LP_PRESET_STD, 0.5);
       // Race week keeps exactly one hard touch (on the run) for sharpness.
-      r.Run.hardPct = r.Run.sessions > 0 ? Math.round(100 / r.Run.sessions) : 0;
+      r.Run.hardPct = r.Run.sessions > 0 ? Math.min(60, Math.round(100 / r.Run.sessions / 5) * 5) : 0;
       r["Erg-Bike"].hardPct = 0;
       r.Run.longRunH = 0;
       setRows(r);
@@ -2815,21 +2949,27 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, lastWeekA
   };
 
   const rowLoads = {};
-  let totalLoad = 0, totalHours = 0, hardCount = 0;
+  let totalLoad = 0, totalHours = 0, hardCount = 0, totalSessions = 0;
   for (const g of LP_GROUPS) {
     rowLoads[g] = Math.round(lpRowLoad(g, rows[g], rates));
     totalLoad += rowLoads[g];
     totalHours += rows[g].hours || 0;
     hardCount += lpRowHardSessions(rows[g]);
+    totalSessions += rows[g].sessions || 0;
   }
   const runRow = rows.Run;
-  const longRunLoad = Math.round(Math.min(runRow.longRunH || 0, runRow.hours || 0) * (rates.Run?.easy ?? 58));
+  const lrH = Math.min(runRow.longRunH || 0, runRow.hours || 0);
+  const longRunLoad = Math.round(lrH * (rates.Run?.easy ?? 58));
   const longRunShare = rowLoads.Run > 0 ? longRunLoad / rowLoads.Run : 0;
   const gap = week.weeklyTarget - totalLoad;
-  const gapMinutes = Math.round(Math.abs(gap) / (rates.Run?.easy || 58) * 60 / 5) * 5;
+  const gapMinutes = Math.max(5, Math.round(Math.abs(gap) / (rates.Run?.easy || 58) * 60 / 5) * 5);
   const impliedRamp = r1(totalLoad / 7 - week.ctlMon);
   const proj = lpProjectSunday(lpAddDays(week.mon, week.dayIdx), totalLoad, week.done);
+  const projDelta = r1(proj.ctlSunday - week.ctlMon);
   const hoursRange = week.weeklyHoursRange || [8, 12];
+  const hoursInRange = totalHours >= hoursRange[0] && totalHours <= hoursRange[1];
+  const rampStr = (week.ramp > 0 ? "+" + week.ramp : String(week.ramp));
+  const fmtH = (v) => (+v).toFixed(2).replace(/\.?0+$/, "");
 
   async function save() {
     const obj = {
@@ -2838,7 +2978,7 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, lastWeekA
     };
     lpSaveLocalTargets(obj);
     onSaved(obj);
-    setSaveMsg({ ok: true, text: "Saved on this device · syncing…" });
+    setSaveMsg({ ok: true, text: "Saved · syncing…" });
     try {
       // No content-type header on purpose: with it, the browser sends a
       // CORS preflight; without it this is a "simple request" that goes
@@ -2850,92 +2990,183 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, lastWeekA
       if (!r.ok) throw new Error("HTTP " + r.status);
       setSaveMsg({ ok: true, text: "Saved · synced across devices ✓" });
     } catch {
-      setSaveMsg({ ok: false, text: "Saved on this device — cloud sync unavailable (targets won't appear on other devices)" });
+      setSaveMsg({ ok: false, text: "Saved on this device — cloud sync unavailable" });
     }
   }
 
-  const sliderRow = (g) => html`<div className="flex items-center gap-2 mt-1.5">
-    <span style=${{ color: C.muted, width: 60 }} className="text-[10px]">Intensity</span>
-    <input type="range" min="0" max="60" step="5" value=${rows[g].hardPct}
-      onInput=${(e) => setRow(g, { hardPct: +e.target.value })}
-      style=${{ flex: 1, accentColor: C.cyan, height: 4 }} />
-    <span style=${{ color: C.text, width: 92 }} className="text-[10px] text-right">${100 - rows[g].hardPct}% easy · ${rows[g].hardPct}% hard</span>
+  const runHard = lpRowHardSessions(rows.Run);
+  const ergHard = lpRowHardSessions(rows["Erg-Bike"]);
+
+  // Totals-panel bullet notes (mockup: dot + bold lead + muted tail).
+  const notes = [];
+  if (totalLoad > week.ceiling) {
+    notes.push({ status: "bad", strong: (totalLoad - week.ceiling) + " over the +" + PLANNER_CFG.ceilingRamp + " ceiling.", rest: "Trim hours or intensity — this pace risks overreaching." });
+  } else if (gap > 10) {
+    notes.push({ status: "watch", strong: gap + " short of the " + rampStr + " target.", rest: "Add ~" + gapMinutes + " min easy run, or accept a " + (impliedRamp > 0 ? "+" + impliedRamp : impliedRamp) + " ramp this week." });
+  } else {
+    notes.push({ status: "good", strong: "On target.", rest: "Planned load is within a few points of the " + rampStr + " plan." });
+  }
+  notes.push({
+    status: proj.acwrSunday != null && proj.acwrSunday > 1.3 ? "watch" : "good",
+    strong: "Projected CTL Sunday: " + proj.ctlSunday,
+    rest: "(" + (projDelta >= 0 ? "+" + projDelta : projDelta) + ")." +
+      (proj.acwrSunday != null
+        ? " ACWR at end of week ≈ " + proj.acwrSunday.toFixed(2) + (proj.acwrSunday <= 1.3 ? " — inside the sweet spot." : " — above the 1.3 line; keep extras easy.")
+        : ""),
+  });
+  notes.push({
+    status: hardCount > hardCap ? "bad" : hardCount === hardCap ? "watch" : "good",
+    strong: "Hard sessions " + hardCount + " / " + hardCap + (hardCount > hardCap ? " — over your cap." : hardCount === hardCap ? " — at your cap." : "."),
+    rest: runHard + " hard run" + (runHard === 1 ? "" : "s") + " + " + ergHard + " hard erg." +
+      (hardCount >= hardCap ? " Adding load from here should be easy volume." : ""),
+  });
+  notes.push({
+    status: longRunShare > PLANNER_CFG.longRunWarnShare || !hoursInRange ? "watch" : "good",
+    strong: "Long run " + fmtH(lrH) + " h = " + Math.round(longRunShare * 100) + "% of run load.",
+    rest: (longRunShare > PLANNER_CFG.longRunWarnShare ? "Above the 40% guideline — consider trimming. " : "Under the 40% guideline; ") +
+      fmtH(totalHours) + " h total is " + (hoursInRange ? "inside" : totalHours < hoursRange[0] ? "below" : "above") + " your " + hoursRange[0] + "–" + hoursRange[1] + " h range.",
+  });
+
+  const presets = [
+    ["std", "Standard build", "Standard build"],
+    ["illness", "Return from illness · −30%", "Illness −30%"],
+    ["recovery", "Recovery week · −20%", "Recovery −20%"],
+    ["race", "Race week", "Race week"],
+    ["copy", "Copy last week", "Copy last week"],
+  ];
+
+  // One sport row. Desktop = table-ish grid; mobile = stacked card.
+  const sportRow = (g) => {
+    const row = rows[g];
+    const mixable = g === "Run" || g === "Erg-Bike";
+    const r = rates[g] || PLANNER_CFG.defaultRates[g];
+    const hardSess = lpRowHardSessions(row);
+    const capLeft = mixable ? (100 - row.hardPct) + "% easy" + (g === "Run" ? " · Z1–2" : "") + (isMobile ? " · " + r.easy + "/h" : "") : null;
+    const capRight = mixable ? row.hardPct + "% hard · " + hardSess + " hard session" + (hardSess === 1 ? "" : "s") : null;
+    const singleCap = g === "Strength" ? "Single rate — HR-based load undercounts strength" : "Single rate";
+    const rateCell = mixable
+      ? html`<div style=${{ color: C.muted }} className="text-[11px] leading-tight">${r.easy} easy<br/>${r.hard} hard</div>`
+      : html`<div style=${{ color: C.muted }} className="text-[11px]">${r.easy} / h</div>`;
+    const stepperPair = html`<div className=${isMobile ? "grid grid-cols-2 gap-2" : "contents"}>
+      <div>
+        ${isMobile ? html`<div style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[9px] font-semibold uppercase mb-1">Sessions</div>` : null}
+        <${LpStepper} value=${row.sessions} step=${1} min=${0} max=${14} onChange=${(v) => setRow(g, { sessions: v })} />
+      </div>
+      <div>
+        ${isMobile ? html`<div style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[9px] font-semibold uppercase mb-1">Hours</div>` : null}
+        <${LpStepper} value=${row.hours} step=${0.25} min=${0} max=${20} onChange=${(v) => setRow(g, { hours: v })} fmt=${fmtH} unit="h" />
+      </div>
+    </div>`;
+    const loadCell = html`<div className="text-right">
+      <div style=${{ color: C.text }} className="text-xl font-bold leading-none">${rowLoads[g]}</div>
+      ${isMobile ? null : html`<div style=${{ color: C.muted }} className="text-[9px] uppercase mt-0.5">load</div>`}
+    </div>`;
+    const nameCell = html`<div className="flex items-center gap-2">
+      <${LpDot} color=${LP_GROUP_COLOR[g]} />
+      <span style=${{ color: C.text }} className="text-sm font-semibold">${LP_GROUP_LABEL[g]}</span>
+      ${g === "Other" ? html`<span style=${{ color: C.muted }} className="text-[10px]">mobility, padel</span>` : null}
+    </div>`;
+    const mixCell = mixable
+      ? html`<${LpMixBar} hardPct=${row.hardPct} onChange=${(v) => setRow(g, { hardPct: v })} capLeft=${capLeft} capRight=${capRight} />`
+      : html`<${LpMixBar} single=${true} capLeft=${singleCap} />`;
+
+    const lrStepper = html`<${LpStepper} value=${row.longRunH} step=${0.25} min=${0} max=${Math.max(0, row.hours)} onChange=${(v) => setRow(g, { longRunH: v })} fmt=${fmtH} unit="h" />`;
+    const lrWarnCol = longRunShare > PLANNER_CFG.longRunWarnShare ? C.amber : C.muted;
+    const longRunBlock = g !== "Run" ? null : isMobile
+      ? html`<div style=${{ borderTop: "1px dashed " + C.border }} className="mt-3 pt-2.5 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div style=${{ color: C.text }} className="text-xs font-semibold">↳ Long run <span style=${{ color: C.muted }} className="font-normal">· Z2, inside the ${fmtH(row.hours)} h</span></div>
+            <div style=${{ color: lrWarnCol }} className="text-[10px] mt-0.5">${longRunLoad} of ${rowLoads.Run} · ${Math.round(longRunShare * 100)}% of run load</div>
+          </div>
+          ${lrStepper}
+        </div>`
+      : html`<div style=${{ borderTop: "1px dashed " + C.border, display: "grid", gridTemplateColumns: "150px 110px 130px 1fr 90px 80px", gap: 12, alignItems: "center", marginTop: 12, paddingTop: 10 }}>
+          <div style=${{ color: C.text }} className="text-xs font-semibold pl-4">↳ Long run</div>
+          <div style=${{ color: C.muted }} className="text-[11px]">1 of the ${row.sessions}</div>
+          <div>${lrStepper}</div>
+          <div style=${{ color: lrWarnCol }} className="text-[10px] leading-snug">
+            Counted inside the ${fmtH(row.hours)} h · Z2 only. Other ${Math.max(0, row.sessions - 1)} runs share the remaining ${fmtH(Math.max(0, row.hours - lrH))} h.
+          </div>
+          <div style=${{ color: C.muted }} className="text-[11px]">${r.easy} / h</div>
+          <div style=${{ color: lrWarnCol }} className="text-[11px] text-right font-semibold">${longRunLoad} of ${rowLoads.Run}</div>
+        </div>`;
+
+    if (isMobile) {
+      return html`<div key=${g} style=${lpCard({ borderRadius: 12 })} className="p-3 mb-2">
+        <div className="flex items-center justify-between mb-2.5">${nameCell}${loadCell}</div>
+        ${stepperPair}
+        <div className="mt-2.5">${mixCell}</div>
+        ${longRunBlock}
+      </div>`;
+    }
+    return html`<div key=${g} style=${lpCard({ borderRadius: 12 })} className="p-3 mb-2">
+      <div style=${{ display: "grid", gridTemplateColumns: "150px 110px 130px 1fr 90px 80px", gap: 12, alignItems: "center" }}>
+        ${nameCell}
+        <div><${LpStepper} value=${row.sessions} step=${1} min=${0} max=${14} onChange=${(v) => setRow(g, { sessions: v })} /></div>
+        <div><${LpStepper} value=${row.hours} step=${0.25} min=${0} max=${20} onChange=${(v) => setRow(g, { hours: v })} fmt=${fmtH} unit="h" /></div>
+        <div>${mixCell}</div>
+        ${rateCell}
+        ${loadCell}
+      </div>
+      ${longRunBlock}
+    </div>`;
+  };
+
+  const capStatus = hardCount > hardCap ? C.red : hardCount === hardCap ? C.amber : C.green;
+  const capRow = html`<div className=${isMobile ? "flex items-center justify-between gap-2 p-3 mb-2 rounded-xl" : "flex items-center gap-3 justify-end mb-3"}
+    style=${isMobile ? lpCard({ borderRadius: 12 }) : {}}>
+    <div>
+      <span style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[10px] font-semibold uppercase">Hard sessions cap</span>
+      <span style=${{ color: capStatus }} className="text-[11px] font-bold ml-2">${hardCount} / ${hardCap} planned${hardCount === hardCap ? " · at cap" : hardCount > hardCap ? " · over" : ""}</span>
+    </div>
+    <${LpStepper} value=${hardCap} step=${1} min=${0} max=${7} onChange=${setHardCap} />
   </div>`;
 
-  return html`<div onClick=${onClose} style=${{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(2,6,14,0.65)" }}
-    className=${"flex " + (isMobile ? "items-end" : "items-center justify-center p-4")}>
+  return html`<div onClick=${onClose} style=${{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(2,6,14,0.7)" }}
+    className=${isMobile ? "" : "flex items-center justify-center p-4"}>
     <div onClick=${(e) => e.stopPropagation()}
-      style=${{ background: C.card, border: "1px solid " + C.border, borderRadius: isMobile ? "16px 16px 0 0" : 14, width: isMobile ? "100%" : "min(780px, 100%)", maxHeight: isMobile ? "92vh" : "88vh", overflowY: "auto" }}>
+      style=${{ background: C.card, border: isMobile ? "none" : "1px solid " + C.border, borderRadius: isMobile ? 0 : 18, width: isMobile ? "100%" : "min(1020px, 100%)", height: isMobile ? "100%" : "auto", maxHeight: isMobile ? "100%" : "92vh", display: "flex", flexDirection: "column" }}>
 
-      <div className="flex items-start justify-between gap-3 p-4 sm:p-5" style=${{ borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.card, zIndex: 5 }}>
+      <div className="flex items-start justify-between gap-3 p-4 sm:p-6 pb-3 shrink-0">
         <div>
-          <div style=${{ color: C.muted, letterSpacing: "0.13em" }} className="text-[10px] font-semibold uppercase">Load Builder</div>
-          <div style=${{ color: C.text }} className="text-lg font-bold mt-0.5">Week ${week.isoWeek.split("-W")[1]} targets</div>
-          <div style=${{ color: C.muted }} className="text-[11px] mt-0.5">Plan from hours — rates convert hours → load per sport</div>
+          <div style=${{ color: C.muted, letterSpacing: "0.13em" }} className="text-[10px] font-semibold uppercase">Load Builder · ${isMobile ? "Wk" : "Week"} ${parseInt(week.isoWeek.split("-W")[1], 10)}</div>
+          <div style=${{ color: C.text }} className="text-lg sm:text-xl font-bold mt-0.5">Plan the week in hours${isMobile ? "" : " — we convert it to load"}</div>
+          <div style=${{ color: C.muted }} className="text-[11px] mt-1">
+            ${isMobile ? "Rates learned from your last 6 months." : "Rates are your own median load per hour by sport and intensity, learned from the last 6 months (not just recent weeks)."}
+          </div>
         </div>
-        <button onClick=${onClose} style=${{ background: "transparent", border: "1px solid " + C.border, color: C.muted, borderRadius: 999 }} className="px-3 py-1.5 text-xs font-semibold shrink-0">✕ Close</button>
+        <button onClick=${onClose} aria-label="Close"
+          style=${{ background: "transparent", border: "1px solid " + C.border, color: C.muted, borderRadius: 10, width: 40, height: 40 }}
+          className="flex items-center justify-center shrink-0"><${IconX} size=${16} /></button>
       </div>
 
-      <div className="p-4 sm:p-5">
-        <div className="flex flex-wrap gap-1.5 mb-4">
-          ${[["std", "Standard build"], ["illness", "Return from illness −30%"], ["recovery", "Recovery week −20%"], ["race", "Race week −50%"], ["copy", "Copy last week"]].map(([k, label]) =>
-            html`<button key=${k} onClick=${() => applyPreset(k)}
-              disabled=${k === "copy" && !lastWeekActual}
-              style=${{ background: "transparent", color: k === "copy" && !lastWeekActual ? C.border : C.muted, border: "1px solid " + C.border, borderRadius: 999, cursor: k === "copy" && !lastWeekActual ? "default" : "pointer" }}
-              className="px-3 py-1.5 text-[11px] font-semibold">${label}</button>`)}
+      <div className=${"px-4 sm:px-6 overflow-y-auto flex-1" + (isMobile ? " pb-3" : "")}>
+        <div className=${"flex items-center gap-2 mb-3 " + (isMobile ? "overflow-x-auto pb-1" : "flex-wrap")} style=${{ scrollbarWidth: "none" }}>
+          ${isMobile ? null : html`<span style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[10px] font-semibold uppercase mr-1">Start from</span>`}
+          ${presets.map(([k, label, short]) => {
+            const on = preset === k;
+            const dis = k === "copy" && !lastWeekActual;
+            return html`<button key=${k} onClick=${() => !dis && applyPreset(k)} disabled=${dis}
+              style=${{ background: on ? C.cyan + "12" : "transparent", color: dis ? C.border : on ? C.cyan : C.muted, border: "1px solid " + (on ? C.cyan : C.border), borderRadius: 999, cursor: dis ? "default" : "pointer", whiteSpace: "nowrap", minHeight: isMobile ? 40 : 32 }}
+              className="px-3.5 py-1.5 text-[11px] font-semibold shrink-0">${isMobile ? short : label}</button>`;
+          })}
         </div>
 
-        ${LP_GROUPS.map((g) => {
-          const row = rows[g];
-          const mixable = g === "Run" || g === "Erg-Bike";
-          return html`<div key=${g} style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 12 }} className="p-3 mb-2">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <div className="flex items-center gap-2" style=${{ width: 92 }}>
-                <span style=${{ width: 8, height: 8, borderRadius: 99, background: LP_GROUP_COLOR[g] }} />
-                <span style=${{ color: C.text }} className="text-sm font-semibold">${g}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span style=${{ color: C.muted }} className="text-[10px]">Sessions</span>
-                <${LpStepper} value=${row.sessions} step=${1} min=${0} max=${14} onChange=${(v) => setRow(g, { sessions: v })} />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span style=${{ color: C.muted }} className="text-[10px]">Hours</span>
-                <${LpStepper} value=${row.hours} step=${0.25} min=${0} max=${20} onChange=${(v) => setRow(g, { hours: v })} fmt=${(v) => v.toFixed(2).replace(/\.?0+$/, "") + "h"} />
-              </div>
-              <div className="ml-auto text-right">
-                <div style=${{ color: C.text }} className="text-base font-bold">${rowLoads[g]}</div>
-                <div style=${{ color: C.muted }} className="text-[9px] uppercase">load</div>
-              </div>
-            </div>
-            ${mixable ? sliderRow(g) : null}
-            ${g === "Run" ? html`<div className="flex flex-wrap items-center gap-2 mt-2 pt-2" style=${{ borderTop: "1px dashed " + C.border }}>
-              <span style=${{ color: C.muted }} className="text-[10px]">Long run</span>
-              <${LpStepper} value=${row.longRunH} step=${0.25} min=${0} max=${Math.max(0, row.hours)} onChange=${(v) => setRow(g, { longRunH: v })} fmt=${(v) => v.toFixed(2).replace(/\.?0+$/, "") + "h"} />
-              <span style=${{ color: longRunShare > PLANNER_CFG.longRunWarnShare ? C.amber : C.muted }} className="text-[10px]">
-                ≈ ${longRunLoad} of run load · ${Math.round(longRunShare * 100)}% of run load${longRunShare > PLANNER_CFG.longRunWarnShare ? " — heavy for one session" : ""}
-              </span>
-            </div>` : null}
-          </div>`;
-        })}
+        ${capRow}
 
-        <div className="flex flex-wrap items-center gap-3 mt-3 mb-4">
-          <span style=${{ color: C.muted }} className="text-[11px] font-semibold">Hard sessions cap</span>
-          <${LpStepper} value=${hardCap} step=${1} min=${0} max=${7} onChange=${setHardCap} />
-          <span style=${{ color: hardCount > hardCap ? C.red : hardCount === hardCap ? C.amber : C.green }} className="text-[11px] font-semibold">
-            ${hardCount} / ${hardCap} planned${hardCount > hardCap ? " — over the cap" : hardCount === hardCap ? " — at the cap" : ""}
-          </span>
-          <button onClick=${() => setEditRates((e) => !e)} style=${{ color: C.muted, background: "transparent", border: "1px solid " + C.border, borderRadius: 999 }} className="px-3 py-1 text-[10px] font-semibold ml-auto">
-            ${editRates ? "Done editing rates" : "Edit per-hour rates"}
-          </button>
-        </div>
+        ${isMobile ? null : html`<div style=${{ display: "grid", gridTemplateColumns: "150px 110px 130px 1fr 90px 80px", gap: 12, color: C.muted, letterSpacing: "0.1em" }} className="text-[9px] font-semibold uppercase px-3 mb-1.5">
+          <span>Sport</span><span>Sessions</span><span>Hours</span><span>Intensity mix</span><span>Rate · load/h</span><span className="text-right">Load</span>
+        </div>`}
 
-        ${editRates ? html`<div style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 12 }} className="p-3 mb-4">
+        ${LP_GROUPS.map(sportRow)}
+
+        ${editRates ? html`<div style=${lpCard({ borderRadius: 12 })} className="p-3 mt-3">
           <div style=${{ color: C.muted }} className="text-[10px] mb-2">
             Load per hour, calibrated from your last 6 months (median; needs ≥${PLANNER_CFG.minRateSamples} sessions per bucket, else defaults). Edits are saved with the targets.
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            ${LP_GROUPS.map((g) => html`<div key=${g} className="flex items-center gap-2">
-              <span style=${{ color: C.text, width: 72 }} className="text-[11px] font-semibold">${g}</span>
+            ${LP_GROUPS.map((g) => html`<div key=${g} className="flex items-center gap-2 flex-wrap">
+              <span style=${{ color: C.text, width: 76 }} className="text-[11px] font-semibold">${LP_GROUP_LABEL[g]}</span>
               ${(g === "Run" || g === "Erg-Bike" ? ["easy", "hard"] : ["easy"]).map((kind) => html`<label key=${kind} className="flex items-center gap-1 text-[10px]" style=${{ color: C.muted }}>
                 ${g === "Run" || g === "Erg-Bike" ? kind : "rate"}
                 <input type="number" min="5" max="200" value=${rates[g][kind]}
@@ -2943,58 +3174,51 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, lastWeekA
                     const v = Math.max(1, +e.target.value || 0);
                     setRates((r) => ({ ...r, [g]: kind === "easy" && !(g === "Run" || g === "Erg-Bike") ? { easy: v, hard: v } : { ...r[g], [kind]: v } }));
                   }}
-                  style=${{ width: 58, background: C.card, color: C.text, border: "1px solid " + C.border, borderRadius: 6, padding: "3px 6px" }} />
+                  style=${{ width: 58, background: C.bg, color: C.text, border: "1px solid " + C.border, borderRadius: 6, padding: "5px 6px" }} />
               </label>`)}
               ${calibrated && calibrated.samples ? html`<span style=${{ color: C.border }} className="text-[9px]">${calibrated.samples[g] || 0} sess.</span>` : null}
             </div>`)}
           </div>
         </div>` : null}
 
-        <div style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 12 }} className="p-3.5">
-          <div className="flex items-baseline justify-between mb-2">
-            <span style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[10px] font-semibold uppercase">Planned vs target</span>
-            <span style=${{ color: C.text }} className="text-sm font-bold">${totalLoad} <span style=${{ color: C.muted }} className="font-normal">/ ${week.weeklyTarget} target</span></span>
-          </div>
-          <${LpBar} done=${totalLoad} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${null} height=${12} fill=${totalLoad > week.ceiling ? C.red : C.cyan} />
-          <div className="mt-3 flex flex-col gap-1.5 text-[11px]">
-            ${gap > 10 ? html`<div style=${{ color: C.amber }}>~${gap} under target — add ~${gapMinutes} min easy run, or accept a ${impliedRamp > 0 ? "+" + impliedRamp : impliedRamp} CTL/wk pace.</div>`
-              : totalLoad > week.ceiling ? html`<div style=${{ color: C.red }}>${totalLoad - week.ceiling} over the +${PLANNER_CFG.ceilingRamp} CTL/wk ceiling — trim hours or intensity.</div>`
-              : gap < -10 ? html`<div style=${{ color: C.green }}>${-gap} over target — fine if it felt planned; watch the ceiling.</div>`
-              : html`<div style=${{ color: C.green }}>On target ✓</div>`}
-            <div style=${{ color: C.muted }}>Projected Sunday: CTL ≈ <span style=${{ color: C.text }} className="font-semibold">${proj.ctlSunday}</span>${proj.acwrSunday != null ? html` · ACWR ≈ <span style=${{ color: proj.acwrSunday > 1.3 ? C.amber : C.text }} className="font-semibold">${proj.acwrSunday.toFixed(2)}</span>` : null}</div>
-            <div style=${{ color: totalHours >= hoursRange[0] && totalHours <= hoursRange[1] ? C.muted : C.amber }}>
-              ${totalHours.toFixed(2).replace(/\.?0+$/, "")} h planned · goal range ${hoursRange[0]}–${hoursRange[1]} h${totalHours < hoursRange[0] ? " — under" : totalHours > hoursRange[1] ? " — over" : " ✓"}
+        <div style=${{ borderTop: "1px solid " + C.border }} className=${"mt-4 pt-4 " + (isMobile ? "" : "grid grid-cols-2 gap-6")}>
+          <div>
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span style=${{ color: C.text }} className="text-3xl font-bold">${totalLoad}</span>
+              <span style=${{ color: C.muted }} className="text-xs">planned load · ${fmtH(totalHours)} h · ${totalSessions} sessions</span>
+            </div>
+            <div className="mt-2.5">
+              <${LpBar} done=${totalLoad} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${null} height=${12} fill=${totalLoad > week.ceiling ? C.red : C.cyan} />
+              <div className="flex justify-between mt-1 text-[10px]" style=${{ color: C.muted }}>
+                <span>0</span>
+                <span>target ${week.weeklyTarget} (${rampStr})</span>
+                <span style=${{ color: C.red }}>ceiling ${week.ceiling}</span>
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-3 mt-3 pt-3" style=${{ borderTop: "1px solid " + C.border }}>
-            <button onClick=${save}
-              style=${{ background: C.cyan, color: "#06212a", border: "none", borderRadius: 10, cursor: "pointer" }}
-              className="px-4 py-2 text-xs font-bold">Save as this week's targets</button>
-            ${saveMsg ? html`<span style=${{ color: saveMsg.ok ? C.green : C.amber }} className="text-[10px]">${saveMsg.text}</span>` : null}
+          <div className=${isMobile ? "mt-3" : ""}>
+            ${notes.map((n, i) => html`<div key=${i} className="flex items-start gap-2 mb-2">
+              <span style=${{ color: STATUS_COLOR[n.status] || C.muted, fontSize: 9, marginTop: 3 }}>●</span>
+              <span className="text-[11px] leading-snug"><b style=${{ color: C.text }}>${n.strong}</b> <span style=${{ color: C.muted }}>${n.rest}</span></span>
+            </div>`)}
           </div>
         </div>
       </div>
-    </div>
-  </div>`;
-}
 
-// Ramp-rate band: <0 declining · 0–3 hold · 3–7 productive build · >7 danger.
-function LpRampBand({ value }) {
-  const min = -3, max = 10;
-  const pct = (v) => ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * 100;
-  const segs = [
-    { a: -3, b: 0, c: C.muted, op: 0.35 },
-    { a: 0, b: 3, c: "#5b6b82", op: 0.8 },
-    { a: 3, b: 7, c: C.green, op: 0.8 },
-    { a: 7, b: 10, c: C.red, op: 0.8 },
-  ];
-  return html`<div>
-    <div style=${{ position: "relative", height: 10, borderRadius: 6, overflow: "visible" }} className="flex">
-      ${segs.map((s, i) => html`<div key=${i} style=${{ width: (pct(s.b) - pct(s.a)) + "%", background: s.c, opacity: s.op, borderRadius: i === 0 ? "6px 0 0 6px" : i === segs.length - 1 ? "0 6px 6px 0" : 0 }} />`)}
-      ${value != null ? html`<div style=${{ position: "absolute", left: pct(value) + "%", top: -3, width: 3, height: 16, background: "#fff", borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.5)", transform: "translateX(-50%)" }} />` : null}
-    </div>
-    <div className="flex justify-between mt-1 text-[9px]" style=${{ color: C.muted }}>
-      <span>decline</span><span style=${{ marginLeft: "8%" }}>0 hold</span><span>3 · build</span><span>7 · danger</span>
+      <div style=${{ borderTop: "1px solid " + C.border, background: C.card }} className="flex items-center gap-2 p-3 sm:px-6 shrink-0 flex-wrap">
+        <button onClick=${() => setEditRates((e) => !e)}
+          style=${{ color: C.muted, background: "transparent", border: "none", cursor: "pointer" }}
+          className="text-[11px] font-semibold flex items-center gap-1.5 px-1">
+          <${IconSettings} size=${13} /> ${editRates ? "Done editing rates" : "Edit per-hour rates"}
+        </button>
+        ${saveMsg ? html`<span style=${{ color: saveMsg.ok ? C.green : C.amber }} className="text-[10px] ml-1">${saveMsg.text}</span>` : null}
+        <div className="ml-auto flex items-center gap-2">
+          <button onClick=${onClose} style=${{ background: "transparent", border: "1px solid " + C.border, color: C.muted, borderRadius: 10, minHeight: 44 }} className="px-4 text-xs font-semibold">Cancel</button>
+          <button onClick=${save} style=${{ background: C.cyan, color: "#06212a", border: "none", borderRadius: 10, cursor: "pointer", minHeight: 44 }} className="px-4 text-xs font-bold">
+            ${isMobile ? "Save as targets" : "Save as this week's targets"}
+          </button>
+        </div>
+      </div>
     </div>
   </div>`;
 }
@@ -3073,11 +3297,15 @@ function LoadPlannerView() {
   const groupTargets = useMemo(() => {
     if (tgt && tgt.rows) {
       const out = {};
-      for (const g of LP_GROUPS) out[g] = {
-        load: Math.round(lpRowLoad(g, tgt.rows[g] || { hours: 0 }, effRates)),
-        sessions: (tgt.rows[g] || {}).sessions || 0,
-      };
-      return { rows: out, source: "builder" };
+      let planned = 0;
+      for (const g of LP_GROUPS) {
+        out[g] = {
+          load: Math.round(lpRowLoad(g, tgt.rows[g] || { hours: 0 }, effRates)),
+          sessions: (tgt.rows[g] || {}).sessions || 0,
+        };
+        planned += out[g].load;
+      }
+      return { rows: out, source: "builder", planned };
     }
     const w6 = server && server.workouts6m;
     if (w6 && w6.length) {
@@ -3087,7 +3315,7 @@ function LoadPlannerView() {
       if (tot > 0) {
         const out = {};
         for (const g of LP_GROUPS) out[g] = { load: Math.round(week.weeklyTarget * sums[g] / tot), sessions: null };
-        return { rows: out, source: "share" };
+        return { rows: out, source: "share", planned: null };
       }
     }
     return null;
@@ -3122,9 +3350,10 @@ function LoadPlannerView() {
     return rows;
   }, [server, week.mon]);
 
-  // Mon–Sun strip. Future days: planned_workouts first, then distribute
-  // the remaining gap over unplanned days with a hard/easy alternation
-  // that respects the hard-sessions cap.
+  // Mon–Sun strip. A day is "actual" once it has recorded load (past days
+  // always; today only after a workout lands). Everything else is a
+  // suggestion: planned_workouts first, then the remaining gap spread
+  // hard/easy across free days, respecting the hard-session cap.
   const stripDays = useMemo(() => {
     const plannedByDate = new Map();
     for (const p of (server && server.plannedThisWeek) || []) {
@@ -3139,32 +3368,38 @@ function LoadPlannerView() {
     const unplannedIdx = [];
     for (let i = 0; i < 7; i++) {
       const iso = lpAddDays(week.mon, i);
-      const isPastOrToday = i <= week.dayIdx;
-      if (isPastOrToday) {
-        const d = LP_BY_ISO.get(iso);
+      const d = LP_BY_ISO.get(iso);
+      const dom = parseISO(iso).getDate();
+      const isToday = i === week.dayIdx;
+      const doneDay = i < week.dayIdx || (isToday && d && d.loadTotal > 0);
+      if (doneDay) {
         const dayWk = weekWorkouts.filter((w) => w.date === iso);
         let label = "Rest";
         if (dayWk.length) {
           const main = dayWk.reduce((a, b) => (b.load > a.load ? b : a));
-          label = main.name && main.name.length <= 18 ? main.name : main.group;
+          label = main.name && main.name.length <= 16 ? main.name : LP_GROUP_LABEL[main.group] || main.group;
+          if (dayWk.length > 1) {
+            const second = dayWk.filter((w) => w !== main).reduce((a, b) => (b.load > a.load ? b : a));
+            const s2 = LP_GROUP_LABEL[second.group] || second.group;
+            label = (LP_GROUP_LABEL[main.group] || main.group) + " + " + s2.toLowerCase();
+          }
         } else if (d && d.loadTotal > 0) {
           const g = lpDayGroups(d);
-          label = LP_GROUPS.reduce((a, b) => (g[b] > g[a] ? b : a));
+          label = LP_GROUP_LABEL[LP_GROUPS.reduce((a, b) => (g[b] > g[a] ? b : a))];
         }
-        out.push({ iso, wd: LP_WD[i], kind: "actual", load: d ? d.loadTotal : 0, label, isToday: i === week.dayIdx });
+        out.push({ iso, wd: LP_WD[i], dom, kind: "actual", load: d ? d.loadTotal : 0, label, isToday });
       } else {
         const p = plannedByDate.get(iso);
         if (p && p.load > 0) {
           plannedFutureSum += p.load;
           plannedHard += p.hard;
-          out.push({ iso, wd: LP_WD[i], kind: "suggested", load: p.load, label: p.names[0] && p.names[0].length <= 18 ? p.names[0] : "Planned", isToday: false });
+          out.push({ iso, wd: LP_WD[i], dom, kind: "suggested", load: p.load, label: p.names[0] && p.names[0].length <= 16 ? p.names[0] : "Planned", isToday });
         } else {
           unplannedIdx.push(out.length);
-          out.push({ iso, wd: LP_WD[i], kind: "suggested", load: 0, label: "", isToday: false });
+          out.push({ iso, wd: LP_WD[i], dom, kind: "suggested", load: 0, label: "", isToday });
         }
       }
     }
-    // Distribute what's left of the target across unplanned future days.
     const remaining = Math.max(0, week.weeklyTarget - week.done - plannedFutureSum);
     if (unplannedIdx.length && remaining > 0) {
       let hardLeft = Math.max(0, hardCap - hardDone - plannedHard);
@@ -3192,6 +3427,7 @@ function LoadPlannerView() {
   const ctl28 = DAYS.length > 28 ? DAYS[DAYS.length - 29].fitness : null;
   const ramp7 = ctlNow != null && ctl7 != null ? r1(ctlNow - ctl7) : null;
   const ramp28 = ctlNow != null && ctl28 != null ? r1((ctlNow - ctl28) / 4) : null;
+  const rampCls = lpRampClass(ramp7);
   const daysToRace = raceDate ? lpDaysBetween(todayIso, raceDate) : null;
   const raceUpcoming = daysToRace != null && daysToRace >= 0;
   const projRaceCtl = raceUpcoming && ctlNow != null && ramp28 != null
@@ -3204,35 +3440,128 @@ function LoadPlannerView() {
     ? { text: "Over ceiling", c: C.red }
     : week.status === "on" ? { text: "On pace", c: C.green } : { text: "Behind", c: C.amber };
 
-  const d0 = parseISO(week.mon), d6 = parseISO(lpAddDays(week.mon, 6));
-  const rangeStr = d0.getDate() + " " + MON[d0.getMonth()] + " – " + d6.getDate() + " " + MON[d6.getMonth()];
   const todayD = parseISO(todayIso);
-  const subBits = [
-    todayD.getDate() + " " + MON[todayD.getMonth()] + " " + todayD.getFullYear(),
-    "Week " + lpIsoWeekNum(todayIso),
-    rangeStr,
-  ];
-  if (raceUpcoming) subBits.push((server.raceEvent || "Race") + " in " + daysToRace + " day" + (daysToRace === 1 ? "" : "s"));
+  const d0 = parseISO(week.mon), d6 = parseISO(lpAddDays(week.mon, 6));
+  const wdShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][todayD.getDay()];
+  const raceName = raceUpcoming ? ((server.raceEvent || "Race").split("(")[0].trim()) : null;
+  const subline = isMobile
+    ? [wdShort + " " + todayD.getDate() + " " + MON[todayD.getMonth()], "Wk " + lpIsoWeekNum(todayIso)]
+    : [
+        wdShort + " " + todayD.getDate() + " " + MON[todayD.getMonth()] + " " + todayD.getFullYear(),
+        "Week " + lpIsoWeekNum(todayIso),
+        "Mon " + d0.getDate() + " – Sun " + d6.getDate(),
+      ];
+  if (raceUpcoming) subline.push(raceName + " in " + daysToRace + " day" + (daysToRace === 1 ? "" : "s"));
 
-  const smallStat = (label, value, color) => html`<div style=${{ background: C.bg, border: "1px solid " + C.border, borderRadius: 10 }} className="px-3 py-2 flex-1 min-w-[86px]">
-    <div style=${{ color: C.muted, letterSpacing: "0.08em" }} className="text-[9px] font-semibold uppercase">${label}</div>
-    <div style=${{ color: color || C.text }} className="text-lg font-bold mt-0.5">${value}</div>
+  const heroStat = (label, value, opts) => html`<div className=${opts && opts.hideMobile ? "hidden sm:block" : ""}>
+    <div style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[10px] font-semibold uppercase">${label}</div>
+    <div style=${{ color: (opts && opts.color) || C.text }} className="text-xl font-bold mt-0.5">${value}</div>
   </div>`;
 
-  const grLine = (status, text, right) => html`<div className="flex items-start justify-between gap-3 py-2" style=${{ borderBottom: "1px solid " + C.grid }}>
-    <div className="flex items-start gap-2 min-w-0">
-      <span style=${{ color: STATUS_COLOR[status] || C.muted, fontSize: 9, marginTop: 3 }}>●</span>
-      <span style=${{ color: C.text }} className="text-xs leading-snug">${text}</span>
-    </div>
-    ${right != null ? html`<span style=${{ color: STATUS_COLOR[status] || C.muted }} className="text-xs font-bold shrink-0">${right}</span>` : null}
-  </div>`;
+  // Split panel rows + footer summary.
+  const splitRows = groupTargets ? LP_GROUPS
+    .filter((g) => g !== "Other" || week.doneByGroup.Other > 0 || (groupTargets.rows.Other && groupTargets.rows.Other.load > 0))
+    .map((g) => {
+      const done = Math.round(week.doneByGroup[g]);
+      const t = groupTargets.rows[g] || { load: 0, sessions: null };
+      const fr = t.load > 0 ? Math.min(1, done / t.load) : 0;
+      const sess = t.sessions != null
+        ? (isMobile ? " · " + (sessionsDone[g] || 0) + "/" + t.sessions
+          : " · " + (sessionsDone[g] || 0) + " of " + t.sessions + (g === "Run" ? " runs" : " sessions"))
+        : "";
+      return html`<div key=${g} className="mb-2.5">
+        <div className="flex items-center justify-between gap-2 text-[11px] mb-1">
+          <span className="flex items-center gap-1.5 min-w-0">
+            <${LpDot} color=${LP_GROUP_COLOR[g]} size=${7} />
+            <span style=${{ color: C.text }} className="font-semibold truncate">${LP_GROUP_LABEL[g]}</span>
+          </span>
+          <span style=${{ color: C.muted }} className="whitespace-nowrap">${done}${isMobile ? "/" : " / "}${t.load}${sess}</span>
+        </div>
+        <div style=${{ height: 6, background: C.bg, border: "1px solid " + C.border, borderRadius: 5, position: "relative" }}>
+          <div style=${{ position: "absolute", left: 0, top: 0, bottom: 0, width: (fr * 100) + "%", background: LP_GROUP_COLOR[g], borderRadius: 4, opacity: 0.9 }} />
+        </div>
+      </div>`;
+    }) : null;
+
+  let splitFooter = null;
+  if (groupTargets && groupTargets.source === "builder") {
+    const leftBits = [];
+    for (const g of LP_GROUPS) {
+      const t = groupTargets.rows[g];
+      if (!t || t.sessions == null) continue;
+      const rem = t.sessions - (sessionsDone[g] || 0);
+      if (rem > 0) leftBits.push(rem + " " + (g === "Run" ? "run" : g === "Erg-Bike" ? "erg session" : g.toLowerCase() + " session") + (rem === 1 ? "" : "s"));
+    }
+    const leftText = leftBits.length <= 1 ? leftBits.join("")
+      : leftBits.slice(0, -1).join(", ") + " and " + leftBits[leftBits.length - 1];
+    splitFooter = html`<div style=${{ color: C.muted }} className="text-[10px] mt-1 leading-relaxed">
+      ${leftBits.length ? leftText + " left. " : "All planned sessions done. "}
+      Targets set in Load Builder${groupTargets.planned != null ? " (" + groupTargets.planned + " planned)" : ""}.
+    </div>`;
+  } else if (groupTargets) {
+    splitFooter = html`<div style=${{ color: C.muted }} className="text-[10px] mt-1">
+      No saved targets yet — using your 6-month per-sport share.${" "}
+      <button onClick=${() => setBuilderOpen(true)} style=${{ color: C.cyan, background: "none", border: "none", padding: 0, cursor: "pointer" }}>Set targets</button>
+    </div>`;
+  }
+
+  const guardItems = [];
+  if (guard.runAcwr != null) {
+    const v = guard.runAcwr;
+    const word = v > 1.5 ? "high" : v >= 1.3 ? "elevated" : "OK";
+    const status = v > 1.5 ? "bad" : v >= 1.3 ? "watch" : "good";
+    const pct = Math.abs(Math.round((v - 1) * 100));
+    guardItems.push({
+      status,
+      title: "Run-only ACWR " + v.toFixed(2) + " · " + word,
+      desc: "Run load is " + pct + "% " + (v >= 1 ? "above" : "below") + " your 4-week average." + (status !== "good" ? " Keep today's run easy." : ""),
+    });
+  } else {
+    guardItems.push({ status: "watch", title: "Run-only ACWR", desc: "Not enough run history yet." });
+  }
+  if (guard.acwrNow != null && guard.acwrIfHi != null) {
+    guardItems.push({
+      status: guard.acwrIfHi > 1.5 ? "bad" : guard.acwrIfHi > 1.3 ? "watch" : "good",
+      title: "ACWR projection",
+      desc: light.hi + " load today → " + guard.acwrIfHi.toFixed(2) +
+        (guard.acwrIfHi <= 1.3 ? " · still optimal. " : " · above the line. ") +
+        (guard.loadTo13 > 0 ? guard.loadTo13 + "+ would tip it past 1.3." : "Already at/above 1.3."),
+    });
+  }
+  if (guard.monotony != null) {
+    const flagged = guard.monotony > PLANNER_CFG.monotonyFlag;
+    guardItems.push({
+      status: flagged ? "watch" : "good",
+      title: "Monotony " + guard.monotony.toFixed(1) + " · " + (flagged ? "flagged" : "OK"),
+      desc: flagged
+        ? "Daily loads are too samey — strain " + guard.strain + ". Add a clearly easy or rest day."
+        : "Hard/easy contrast is fine (flag above 2.0).",
+    });
+  }
+  const recTarget = Math.round(week.lastWeekTotal * PLANNER_CFG.recoveryWeekCut);
+  guardItems.push({
+    status: builds >= PLANNER_CFG.maxBuildWeeks ? "watch" : "good",
+    title: builds + " build week" + (builds === 1 ? "" : "s") + " in a row",
+    desc: builds >= PLANNER_CFG.maxBuildWeeks
+      ? "Plan a recovery week next (≈ −20%, target " + recTarget + ")."
+      : "Room to keep building.",
+  });
+  if (week.taper) {
+    guardItems.push({ status: "watch", title: "Taper window", desc: week.taper.toRace + " days to race — weekly target auto-reduced ×" + week.taper.factor + "." });
+  }
+
+  const buildRows = ladderRows.filter((r) => !r.isCurrent);
+  const firstBuild = builds > 0 ? buildRows[buildRows.length - builds] : null;
+
+  const solidSwatch = (color) => html`<span style=${{ width: 9, height: 9, borderRadius: 2, background: color, display: "inline-block" }} />`;
+  const dashedSwatch = html`<span style=${{ width: 9, height: 9, borderRadius: 2, border: "1.5px dashed " + C.muted, display: "inline-block" }} />`;
 
   return html`<div>
-    <div className="flex items-start justify-between flex-wrap gap-3 mb-5">
+    <div className="flex items-start justify-between flex-wrap gap-3 mb-4">
       <div>
         <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Load Planner</div>
         <h1 className="text-2xl font-bold mt-1">This Week</h1>
-        <div style=${{ color: C.muted }} className="text-xs mt-1">${subBits.join(" · ")}</div>
+        <div style=${{ color: C.muted }} className="text-xs mt-1">${subline.join(" · ")}</div>
       </div>
       <div className="w-full sm:w-auto"><${LpRampChip} ramp=${ramp} onChange=${setRamp} /></div>
     </div>
@@ -3241,132 +3570,134 @@ function LoadPlannerView() {
       Planner data fetch failed (${serverErr}) — showing trends only; per-hour rates use defaults.
     </div>` : null}
 
-    <${Card} title="Weekly load" sub=${"Target = 7 × (Monday CTL " + week.ctlMon.toFixed(0) + " + ramp " + (ramp > 0 ? "+" + ramp : ramp) + "). Red line = +" + PLANNER_CFG.ceilingRamp + " CTL/wk overreach ceiling."}
-      right=${html`<span style=${{ color: statusPill.c, border: "1px solid " + statusPill.c, borderRadius: 999 }} className="text-[11px] font-bold px-3 py-1">${statusPill.text}</span>`}>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div style=${lpCard()} className="p-3.5 sm:p-5 mb-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2">
-          <div className="flex items-baseline gap-2 mb-2">
-            <span className="text-3xl font-bold" style=${{ color: C.text }}>${week.done}</span>
-            <span style=${{ color: C.muted }} className="text-sm">/ ${week.weeklyTarget} target</span>
-            ${week.taper ? html`<span style=${{ color: C.violet, border: "1px solid " + C.violet + "66", borderRadius: 999 }} className="text-[10px] font-semibold px-2 py-0.5">Taper — target ×${week.taper.factor}</span>` : null}
+          <${LpTitle} label="Weekly load · all sports"
+            right=${html`<span style=${{ color: statusPill.c, border: "1px solid " + statusPill.c + "66", background: statusPill.c + "12", borderRadius: 999 }} className="text-[11px] font-bold px-3 py-1 flex items-center gap-1">
+              ${week.status === "on" ? html`<${IconCheck} size=${11} />` : null}${statusPill.text}
+            </span>`} />
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="text-4xl font-bold" style=${{ color: C.text }}>${week.done}</span>
+            <span style=${{ color: C.muted }} className="text-xl">/ ${week.weeklyTarget}</span>
+            <span style=${{ color: C.muted }} className="text-xs hidden sm:inline ml-2">
+              target for ${ramp > 0 ? "+" + ramp : ramp} CTL · ceiling ${week.ceiling}
+            </span>
+            ${week.taper ? html`<span style=${{ color: C.violet, border: "1px solid " + C.violet + "66", borderRadius: 999 }} className="text-[10px] font-semibold px-2 py-0.5">Taper ×${week.taper.factor}</span>` : null}
           </div>
-          <${LpBar} done=${week.done} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${week.pace} height=${18} fill=${week.done > week.ceiling ? C.red : C.cyan} />
-          <div className="flex justify-between mt-1 text-[9px]" style=${{ color: C.muted }}>
-            <span>0</span><span>pace ${Math.round(week.pace)}</span><span style=${{ color: C.red }}>ceiling ${week.ceiling}</span>
+          <div className="mt-3">
+            <${LpBar} done=${week.done} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${week.pace} height=${16} fill=${week.done > week.ceiling ? C.red : C.cyan} />
+            <div className="flex justify-between mt-1 text-[10px]" style=${{ color: C.muted }}>
+              <span>0</span>
+              <span>pace ${isMobile ? "" : "line "}${Math.round(week.pace)}</span>
+              <span style=${{ color: C.red }}>ceiling ${week.ceiling}</span>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2 mt-3">
-            ${smallStat("To go", Math.max(0, week.weeklyTarget - week.done))}
-            ${smallStat("Days left", week.daysLeft)}
-            ${smallStat("Needed / day", Math.round(week.neededPerDay), C.cyan)}
-            ${smallStat("Last week", week.lastWeekTotal)}
+          <div className="flex gap-6 sm:gap-10 mt-4 flex-wrap">
+            ${heroStat("To go", Math.max(0, week.weeklyTarget - week.done))}
+            ${heroStat("Days left", week.daysLeft)}
+            ${heroStat(isMobile ? "Per day" : "Needed per day", "~" + Math.round(week.neededPerDay), { color: C.cyan })}
+            ${heroStat("Last week", week.lastWeekTotal, { hideMobile: true })}
           </div>
         </div>
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[10px] font-semibold uppercase">Split vs targets</span>
-            <button onClick=${() => setBuilderOpen(true)} style=${{ color: C.cyan, background: "transparent", border: "none", cursor: "pointer", padding: 0 }} className="text-[11px] font-semibold">Load Builder →</button>
-          </div>
-          ${groupTargets ? LP_GROUPS.filter((g) => g !== "Other" || week.doneByGroup.Other > 0 || (groupTargets.rows.Other && groupTargets.rows.Other.load > 0)).map((g) => {
-            const done = Math.round(week.doneByGroup[g]);
-            const t = groupTargets.rows[g] || { load: 0, sessions: null };
-            const fr = t.load > 0 ? Math.min(1, done / t.load) : 0;
-            return html`<div key=${g} className="mb-2.5">
-              <div className="flex items-center justify-between text-[11px] mb-1">
-                <span style=${{ color: C.text }} className="font-semibold">${g}</span>
-                <span style=${{ color: C.muted }}>${done} / ${t.load}${t.sessions != null ? " · " + (sessionsDone[g] || 0) + " of " + t.sessions + " sessions" : ""}</span>
-              </div>
-              <div style=${{ height: 7, background: C.bg, border: "1px solid " + C.border, borderRadius: 5, position: "relative" }}>
-                <div style=${{ position: "absolute", left: 0, top: 0, bottom: 0, width: (fr * 100) + "%", background: LP_GROUP_COLOR[g], borderRadius: 4, opacity: 0.9 }} />
-              </div>
-            </div>`;
-          }) : html`<div style=${{ color: C.muted }} className="text-xs">Set targets in the <button onClick=${() => setBuilderOpen(true)} style=${{ color: C.cyan, background: "none", border: "none", padding: 0, cursor: "pointer" }} className="font-semibold">Load Builder</button> to track your per-sport split.</div>`}
-          ${groupTargets && groupTargets.source === "share" ? html`<div style=${{ color: C.muted }} className="text-[10px] mt-1">No saved targets yet — using your 6-month per-sport share. <button onClick=${() => setBuilderOpen(true)} style=${{ color: C.cyan, background: "none", border: "none", padding: 0, cursor: "pointer" }}>Set targets</button></div>` : null}
+        <div style=${isMobile ? {} : { borderLeft: "1px solid " + C.border, paddingLeft: 20 }}>
+          <${LpTitle} label="Split vs targets"
+            right=${html`<button onClick=${() => setBuilderOpen(true)}
+              style=${{ color: C.cyan, background: "transparent", border: "none", cursor: "pointer", padding: 0 }}
+              className="text-[11px] font-semibold flex items-center gap-1"><${IconPencil} size=${12} /> Load Builder</button>`} />
+          ${splitRows || html`<div style=${{ color: C.muted }} className="text-xs">
+            Set targets in the <button onClick=${() => setBuilderOpen(true)} style=${{ color: C.cyan, background: "none", border: "none", padding: 0, cursor: "pointer" }} className="font-semibold">Load Builder</button> to track your per-sport split.
+          </div>`}
+          ${splitFooter}
         </div>
       </div>
-    <//>
+    </div>
 
-    <div style=${{ background: C.card, border: "1px solid " + C.border, borderLeft: "3px solid " + lightCol, borderRadius: 14 }} className="p-2.5 sm:p-5 mb-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2">
-          <span style=${{ color: C.muted, letterSpacing: "0.13em" }} className="text-xs font-semibold uppercase">Today</span>
-          <span style=${{ color: lightCol, border: "1px solid " + lightCol, borderRadius: 999 }} className="text-[10px] font-bold px-2.5 py-0.5 uppercase">
-            ${light.light === "red" ? "Rest / mobility" : light.light === "amber" ? "Easy Z2 only" : "Clear to train"}
-          </span>
-        </div>
-        <div className="text-sm">
+    <div style=${lpCard({ borderLeft: "3px solid " + lightCol })} className="p-3.5 sm:p-5 mb-4">
+      <${LpTitle} label=${"Today · " + LP_WD_FULL[week.dayIdx]} />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <span style=${{ width: 12, height: 12, borderRadius: 99, background: lightCol, boxShadow: "0 0 0 4px " + lightCol + "22", flexShrink: 0 }} />
+            <span style=${{ color: C.text }} className="text-lg font-bold leading-tight">${light.headline}</span>
+          </div>
           ${light.hi <= 0
-            ? html`<span style=${{ color: C.green }} className="font-semibold">Weekly target met — anything extra is bonus</span>`
-            : html`<span><span style=${{ color: C.muted }}>Suggested load </span><span style=${{ color: C.text }} className="font-bold">${light.lo}–${light.hi}</span></span>`}
+            ? html`<div style=${{ color: C.green }} className="text-sm font-semibold mt-2">Weekly target met — anything extra is bonus</div>`
+            : html`<div className="flex items-baseline gap-2 mt-2">
+                <span style=${{ color: C.text }} className="text-3xl font-bold">${light.lo}–${light.hi}</span>
+                <span style=${{ color: C.muted }} className="text-xs">suggested load</span>
+              </div>`}
+        </div>
+        <div className="lg:col-span-2">
+          ${light.inputs.map((inp, i) => html`<div key=${inp.label} className="flex items-center justify-between gap-3 py-1.5"
+            style=${i < light.inputs.length - 1 ? { borderBottom: "1px solid " + C.grid } : {}}>
+            <span style=${{ color: C.muted }} className="text-xs">${inp.label}</span>
+            <span className="text-xs whitespace-nowrap">
+              <b style=${{ color: C.text }}>${inp.value}</b>
+              <span style=${{ color: C.muted }}> · </span>
+              <span style=${{ color: STATUS_COLOR[inp.status] || C.muted }} className="font-semibold">${inp.word}</span>
+            </span>
+          </div>`)}
         </div>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        ${light.inputs.map((inp) => html`<div key=${inp.label} style=${{ background: C.bg, border: "1px solid " + C.border, borderLeft: "3px solid " + (STATUS_COLOR[inp.status] || C.muted), borderRadius: 8 }} className="px-2.5 py-2">
-          <div style=${{ color: C.muted }} className="text-[9px] font-semibold uppercase">${inp.label}</div>
-          <div style=${{ color: C.text }} className="text-sm font-bold mt-0.5">${inp.value}</div>
-        </div>`)}
-      </div>
-      ${planToday ? html`<div style=${{ color: C.muted }} className="text-xs mt-3">
-        Plan says: <span style=${{ color: C.text }} className="font-semibold">${planToday.name || planToday.sport || "workout"}</span>
-        ${planToday.planned_load ? html`<span> · ${planToday.planned_load} load</span>` : null}
-        ${planToday.planned_duration_s ? html`<span> · ${Math.round(planToday.planned_duration_s / 60)} min</span>` : null}
+      ${planToday ? html`<div style=${{ color: C.muted, borderTop: "1px solid " + C.grid }} className="text-xs mt-3 pt-3">
+        Plan says: <b style=${{ color: C.text }}>${planToday.name || planToday.sport || "workout"}</b>
+        ${planToday.description ? html`<span> · ${String(planToday.description).slice(0, 110)}</span>`
+          : html`<span>${planToday.planned_load ? " · " + planToday.planned_load + " load" : ""}${planToday.planned_duration_s ? " · " + Math.round(planToday.planned_duration_s / 60) + " min" : ""}</span>`}
       </div>` : null}
     </div>
 
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-4">
-      <${Card} title="Ramp rate" sub="How fast fitness (CTL) is rising. 3–7 per week is a productive build; above 7 is overreach territory.">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+      <div style=${lpCard()} className="p-3.5 sm:p-5">
+        <${LpTitle} label="Ramp rate · CTL"
+          right=${html`<span style=${{ color: rampCls.color }} className="text-xs font-bold">${rampCls.word}</span>`} />
         <div className="flex items-baseline gap-2 mb-3">
           <span className="text-3xl font-bold" style=${{ color: ramp7 != null && ramp7 > 7 ? C.red : ramp7 != null && ramp7 >= 3 ? C.green : C.text }}>${ramp7 != null ? (ramp7 > 0 ? "+" + ramp7 : ramp7) : "—"}</span>
-          <span style=${{ color: C.muted }} className="text-xs">CTL / wk (7d)</span>
+          <span style=${{ color: C.muted }} className="text-xs">CTL / week</span>
         </div>
         <${LpRampBand} value=${ramp7} />
-        <div className="flex gap-2 mt-4">
-          ${smallStat("CTL now", ctlNow != null ? r1(ctlNow) : "—")}
-          ${smallStat("7d ago", ctl7 != null ? r1(ctl7) : "—")}
-          ${smallStat("28d ago", ctl28 != null ? r1(ctl28) : "—")}
+        <div className="flex gap-8 mt-4">
+          ${[["CTL now", ctlNow], ["7 d ago", ctl7], ["28 d ago", ctl28]].map(([lab, v]) => html`<div key=${lab}>
+            <div style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[9px] font-semibold uppercase">${lab}</div>
+            <div style=${{ color: C.text }} className="text-lg font-bold mt-0.5">${v != null ? r1(v) : "—"}</div>
+          </div>`)}
         </div>
         <div style=${{ color: C.muted }} className="text-[11px] mt-3">
-          4-week avg ramp: <span style=${{ color: C.text }} className="font-semibold">${ramp28 != null ? (ramp28 > 0 ? "+" + ramp28 : ramp28) : "—"} / wk</span>
-          ${projRaceCtl != null ? html`<span> · at this rate, CTL ≈ <span style=${{ color: C.cyan }} className="font-semibold">${projRaceCtl}</span> on race day (${daysToRace} d)</span>` : null}
+          4-week average <b style=${{ color: C.text }}>${ramp28 != null ? (ramp28 > 0 ? "+" + ramp28 : ramp28) + " / wk" : "—"}</b>${projRaceCtl != null ? html`<span>. At this rate CTL ≈ <b style=${{ color: C.cyan }}>${projRaceCtl}</b> by race week.</span>` : "."}
         </div>
-      <//>
+      </div>
 
-      <${Card} title="Guardrails" sub="Injury-risk checks beyond the headline numbers.">
-        ${grLine(
-          guard.runAcwr == null ? "watch" : guard.runAcwr > 1.5 ? "bad" : guard.runAcwr >= 1.3 ? "watch" : "good",
-          guard.runAcwr == null ? "Run-only ACWR — not enough run history" :
-            "Run-only ACWR — run load is " + Math.abs(Math.round((guard.runAcwr - 1) * 100)) + "% " + (guard.runAcwr >= 1 ? "above" : "below") + " your 4-week average",
-          guard.runAcwr != null ? guard.runAcwr.toFixed(2) : "—")}
-        ${guard.acwrNow != null ? grLine(
-          guard.acwrIfHi > 1.5 ? "bad" : guard.acwrIfHi > 1.3 ? "watch" : "good",
-          "If you do " + light.hi + " load today, ACWR becomes " + guard.acwrIfHi.toFixed(2) +
-            (guard.loadTo13 > 0 ? " · crosses 1.3 at ~" + guard.loadTo13 + " load" : " · already at/above 1.3"),
-          guard.acwrNow.toFixed(2)) : null}
-        ${guard.monotony != null ? grLine(
-          guard.monotony > PLANNER_CFG.monotonyFlag ? "watch" : "good",
-          guard.monotony > PLANNER_CFG.monotonyFlag
-            ? "Monotony " + guard.monotony.toFixed(1) + " — daily loads too samey (Foster > 2.0 flags). Strain " + guard.strain + "; add a clearly easy or rest day."
-            : "Monotony healthy — good hard/easy variation this week",
-          guard.monotony.toFixed(1)) : null}
-        ${grLine(
-          builds >= PLANNER_CFG.maxBuildWeeks ? "watch" : "good",
-          builds >= PLANNER_CFG.maxBuildWeeks
-            ? builds + " consecutive build weeks — plan a recovery week (≈ −20%, target ~" + Math.round(week.lastWeekTotal * PLANNER_CFG.recoveryWeekCut) + ")"
-            : builds + " consecutive build week" + (builds === 1 ? "" : "s") + " — room to keep building",
-          builds)}
-        ${week.taper ? grLine("watch", "Taper window — " + week.taper.toRace + " days to race, weekly target auto-reduced ×" + week.taper.factor, null) : null}
-      <//>
+      <div style=${lpCard()} className="p-3.5 sm:p-5">
+        <${LpTitle} label="Guardrails" />
+        ${guardItems.map((it, i) => html`<div key=${i} className="flex items-start gap-2.5 py-2"
+          style=${i < guardItems.length - 1 ? { borderBottom: "1px solid " + C.grid } : {}}>
+          <span style=${{ color: STATUS_COLOR[it.status] || C.muted, fontSize: 9, marginTop: 4 }}>●</span>
+          <div className="min-w-0">
+            <div style=${{ color: C.text }} className="text-xs font-bold">${it.title}</div>
+            <div style=${{ color: C.muted }} className="text-[11px] mt-0.5 leading-snug">${it.desc}</div>
+          </div>
+        </div>`)}
+      </div>
     </div>
 
-    <${Card} title="Week plan" sub="Solid = done. Dashed = suggested (planned workouts first, then the remaining target spread hard/easy across free days, respecting the hard-session cap).">
-      <${LpWeekStrip} days=${stripDays} />
-    <//>
+    <div style=${lpCard()} className="p-3.5 sm:p-5 mb-4">
+      <${LpTitle} label=${isMobile ? "Week plan" : "Week plan · actual vs suggested"}
+        right=${html`<${LpLegend} items=${[[solidSwatch(C.cyan), "Done"], [dashedSwatch, "Suggested"]]} />`} />
+      <${LpWeekStrip} days=${stripDays} isMobile=${isMobile} />
+    </div>
 
-    <${Card} title="Weekly load ladder" sub="Last 9 weeks, coloured by build / hold / recovery vs the week before.">
-      <${LpLadder} rows=${ladderRows} currentTarget=${week.weeklyTarget} currentDone=${week.done} />
-      ${builds >= PLANNER_CFG.maxBuildWeeks ? html`<div style=${{ color: C.amber }} className="text-[11px] mt-2">
-        ${builds} build weeks in a row — schedule a recovery week soon (≈ −20% → target ~${Math.round(week.lastWeekTotal * PLANNER_CFG.recoveryWeekCut)}).
-      </div>` : null}
-    <//>
+    <div style=${lpCard()} className="p-3.5 sm:p-5 mb-4">
+      <${LpTitle} label=${isMobile ? "Load ladder · 9 weeks" : "Weekly load ladder · last 9 weeks"}
+        right=${html`<${LpLegend} items=${[[solidSwatch(C.cyan), "Build"], [solidSwatch("#5b6b82"), "Hold"], [solidSwatch(C.violet), "Recovery"]]} />`} />
+      <${LpLadder} rows=${ladderRows} currentTarget=${week.weeklyTarget} currentDone=${week.done} isMobile=${isMobile} />
+      ${builds >= PLANNER_CFG.maxBuildWeeks && firstBuild ? html`<div style=${{ borderTop: "1px solid " + C.grid }} className="flex items-start gap-2 mt-3 pt-2.5">
+        <span style=${{ color: C.amber, fontSize: 9, marginTop: 3 }}>●</span>
+        <span className="text-[11px]" style=${{ color: C.muted }}>
+          W${firstBuild.week}–W${ladderRows[ladderRows.length - 2].week} are ${builds} build weeks in a row.
+          Suggested next week: <b style=${{ color: C.text }}>Recovery · target ≈ ${recTarget}</b>, then resume ${ramp > 0 ? "+" + ramp : ramp}.
+        </span>
+      </div>` : isMobile ? html`<div style=${{ color: C.muted }} className="text-[10px] mt-2 text-right">numbers = CTL</div>` : null}
+    </div>
 
     <${LoadBuilderModal}
       open=${builderOpen}
