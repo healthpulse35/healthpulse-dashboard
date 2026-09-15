@@ -2264,7 +2264,6 @@ function CalendarView() {
       ${data.syncs ? html`<div style=${{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, fontSize: 10, color: C.muted, lineHeight: 1.35 }}>
         <div style=${{ fontSize: 9, letterSpacing: 1, textTransform: "uppercase", fontWeight: 600 }}>Last sync</div>
         <div>Intervals.icu · <span style=${{ color: C.text }}>${calRelTime(data.syncs.intervals_icu)}</span></div>
-        <div>Strava · <span style=${{ color: C.text }}>${calRelTime(data.syncs.strava)}</span></div>
         <div>Spreadsheet · <span style=${{ color: C.text }}>${calRelTime(data.syncs.spreadsheet)}</span></div>
       </div>` : null}
     </div>
