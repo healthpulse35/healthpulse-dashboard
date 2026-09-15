@@ -2921,9 +2921,10 @@ function LpRampBand({ value }) {
 }
 
 // -- Load Builder --
-// Sets the week's per-sport targets from HOURS (Kevin is returning from
-// illness — a recent average would sandbag him). Desktop: centered modal
-// with a table layout. Mobile: full-screen sheet with stacked cards.
+// Sets the week's per-sport targets from HOURS; every preset is anchored to
+// last week's actuals (std = scaled to the ramp target, recovery −20%,
+// taper −40%, copy as-is). Desktop: centered modal with a table layout.
+// Mobile: full-screen sheet with stacked cards.
 const LP_PRESET_STD = {
   Run: { sessions: 4, hours: 3.5, hardPct: 30, longRunH: 1.5 },
   Strength: { sessions: 3, hours: 3.0, hardPct: 0, longRunH: 0 },
@@ -2944,8 +2945,17 @@ function lpScalePreset(base, f) {
   return out;
 }
 
-// Standard-build preset: session counts come from goals.yaml
-// weekly_sessions (via the planner payload); hours per the handoff.
+// Standard build = last week's structure scaled so the priced total lands
+// on the weekly target (last week + the chosen CTL ramp).
+function lpScaleToTarget(base, target, rates) {
+  let load = 0;
+  for (const g of LP_GROUPS) load += lpRowLoad(g, base[g], rates);
+  return lpScalePreset(base, load > 0 ? target / load : 1);
+}
+
+// Fallback structure when there's no last-week data: session counts come
+// from goals.yaml weekly_sessions (via the planner payload); hours per the
+// handoff.
 function lpStandardPreset(ws) {
   const p = {};
   for (const g of LP_GROUPS) p[g] = { ...LP_PRESET_STD[g] };
@@ -2978,9 +2988,10 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, weeklySes
       setRates({ ...(calibrated?.rates || PLANNER_CFG.defaultRates), ...(savedTargets.rates || {}) });
       setPreset(null);
     } else {
-      setRows(lpStandardPreset(weeklySessions));
+      const rr = calibrated?.rates || PLANNER_CFG.defaultRates;
+      setRows(lpScaleToTarget(lastWeekActual || stdPreset, week.weeklyTarget, rr));
       setHardCap(PLANNER_CFG.hardCapDefault);
-      setRates(calibrated?.rates || PLANNER_CFG.defaultRates);
+      setRates(rr);
       setPreset("std");
     }
   }, [open]);
@@ -2988,20 +2999,16 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, weeklySes
   if (!open) return null;
 
   const setRow = (g, patch) => { setPreset(null); setRows((r) => ({ ...r, [g]: { ...r[g], ...patch } })); };
+  // Every preset starts from what was actually done last week (goals.yaml
+  // structure as fallback when there's no last-week data).
+  const lastWeekBase = lastWeekActual || stdPreset;
   const applyPreset = (name) => {
     setSaveMsg(null);
     setPreset(name);
-    if (name === "std") setRows(stdPreset);
-    else if (name === "illness") setRows(lpScalePreset(stdPreset, 0.7));
-    else if (name === "recovery") setRows(lpScalePreset(stdPreset, 0.8));
-    else if (name === "race") {
-      const r = lpScalePreset(stdPreset, 0.5);
-      // Race week keeps exactly one hard touch (on the run) for sharpness.
-      r.Run.hardPct = r.Run.sessions > 0 ? Math.min(60, Math.round(100 / r.Run.sessions / 5) * 5) : 0;
-      r["Erg-Bike"].hardPct = 0;
-      r.Run.longRunH = 0;
-      setRows(r);
-    } else if (name === "copy" && lastWeekActual) setRows(lastWeekActual);
+    if (name === "std") setRows(lpScaleToTarget(lastWeekBase, week.weeklyTarget, rates));
+    else if (name === "recovery") setRows(lpScalePreset(lastWeekBase, 0.8));
+    else if (name === "taper") setRows(lpScalePreset(lastWeekBase, 0.6));
+    else if (name === "copy" && lastWeekActual) setRows(lastWeekActual);
   };
 
   const rowLoads = {};
@@ -3086,9 +3093,8 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, weeklySes
 
   const presets = [
     ["std", "Standard build", "Standard build"],
-    ["illness", "Return from illness · −30%", "Illness −30%"],
     ["recovery", "Recovery week · −20%", "Recovery −20%"],
-    ["race", "Race week", "Race week"],
+    ["taper", "Taper week · −40%", "Taper −40%"],
     ["copy", "Copy last week", "Copy last week"],
   ];
 
