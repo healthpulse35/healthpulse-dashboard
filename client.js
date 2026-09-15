@@ -2767,7 +2767,9 @@ function lpProjectSunday(todayIso, plannedWeekTotal, doneSoFar) {
 function lpLoadRamp() {
   try {
     const v = JSON.parse(localStorage.getItem(PLANNER_CFG.rampKey));
-    if (typeof v === "number" && PLANNER_CFG.rampOptions.some((o) => o.v === v)) return v;
+    // Any finite value in a sane band — the Load Builder can set custom
+    // ramps (e.g. +4.2) via its manual-load coupling, not just the presets.
+    if (typeof v === "number" && isFinite(v) && v >= -5 && v <= 10) return v;
   } catch { /* ignore */ }
   return PLANNER_CFG.defaultRamp;
 }
@@ -3030,19 +3032,31 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
   const [preset, setPreset] = useState(null);
   const [phaseOpen, setPhaseOpen] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null); // {ok, text}
+  // The ramp lives IN the builder and couples both ways with the load:
+  // stepping the ramp rescales the hours to hit the new target; typing a
+  // load sets the hours and back-solves the implied ramp. Saving writes
+  // the ramp into the targets payload, and the tab syncs to it.
+  const [rampSel, setRampSel] = useState(week.ramp);
+  const [loadInput, setLoadInput] = useState("");
 
   const fmtH = (v) => (+v).toFixed(2).replace(/\.?0+$/, "");
   const r1h = (v) => Math.round(v * 10) / 10;
 
+  // Local target from the in-builder ramp: 7 × (CTL_monday + ramp), with
+  // the taper factor still applied like on the tab.
+  const taperF = week.taper ? week.taper.factor : 1;
+  const rampTarget = (r) => Math.round(7 * (week.ctlMon + r) * taperF);
+  const targetLocal = rampTarget(rampSel);
+
   // "Standard build" baseline: strength hours copied from last week (3 h
-  // default), aerobic hours solved so the priced plan lands on this week's
-  // ramp target. Presets then scale the HOURS only — the phase owns the
-  // zone split throughout.
-  const stdHours = (ph, rr) => {
+  // default), aerobic hours solved so the priced plan lands on the ramp
+  // target. Presets then scale the HOURS only — the phase owns the zone
+  // split throughout.
+  const stdHours = (ph, rr, target) => {
     const sH = lastWeekHours ? r1h(lastWeekHours.strengthH) : 3;
     const perAeroRate = LP_BANDS.reduce((s, b) => s + lpPhaseMid(ph, b.key) * (rr[b.key] || PLANNER_CFG.defaultRates[b.key]), 0);
     const aH = perAeroRate > 0
-      ? Math.max(0, (week.weeklyTarget - sH * (rr.Strength || PLANNER_CFG.defaultRates.Strength)) / perAeroRate)
+      ? Math.max(0, (target - sH * (rr.Strength || PLANNER_CFG.defaultRates.Strength)) / perAeroRate)
       : 0;
     return { aerobicH: r1h(aH), strengthH: sH };
   };
@@ -3056,8 +3070,11 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
     setSaveMsg(null);
     setEditRates(false);
     setPhaseOpen(false);
+    setLoadInput("");
     const rr = { ...PLANNER_CFG.defaultRates, ...(calibrated ? calibrated.rates : {}) };
     const t = savedTargets;
+    const r0 = t && typeof t.ramp === "number" && isFinite(t.ramp) ? t.ramp : week.ramp;
+    setRampSel(r0);
     if (t && t.isoWeek === week.isoWeek && t.bandHours) {
       const ph = LP_PHASES[t.phase] ? t.phase : phaseAuto;
       setPhase(ph);
@@ -3068,7 +3085,7 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
       setRates({ ...rr, ...(t.rates || {}) });
       setPreset(null);
     } else {
-      const hrs = stdHours(phaseAuto, rr);
+      const hrs = stdHours(phaseAuto, rr, rampTarget(r0));
       setPhase(phaseAuto);
       setAerobicH(hrs.aerobicH);
       setStrengthH(hrs.strengthH);
@@ -3106,7 +3123,7 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
     let hrs;
     if (name === "copy" && lastWeekHours) hrs = { aerobicH: r1h(lastWeekHours.aerobicH), strengthH: r1h(lastWeekHours.strengthH) };
     else {
-      hrs = stdHours(phase, rates);
+      hrs = stdHours(phase, rates, targetLocal);
       if (name === "illness") hrs = { aerobicH: r1h(hrs.aerobicH * 0.7), strengthH: r1h(hrs.strengthH * 0.7) };
       else if (name === "recovery") hrs = { aerobicH: r1h(hrs.aerobicH * 0.8), strengthH: r1h(hrs.strengthH * 0.8) };
     }
@@ -3124,12 +3141,45 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
 
   const hoursRange = week.weeklyHoursRange || [8, 12];
   const hoursInRange = totalHours >= hoursRange[0] && totalHours <= hoursRange[1];
-  const gap = week.weeklyTarget - totalLoad;
-  const rampStr = week.ramp > 0 ? "+" + week.ramp : String(week.ramp);
+  const gap = targetLocal - totalLoad;
+  const rampStr = rampSel > 0 ? "+" + r1(rampSel) : String(r1(rampSel));
   const proj = lpProjectSunday(lpAddDays(week.mon, week.dayIdx), totalLoad, week.done);
   const projDelta = r1(proj.ctlSunday - week.ctlMon);
-  // The linear target maps load to ramp: totalLoad/7 − CTL_monday.
-  const impliedRamp = r1(totalLoad / 7 - week.ctlMon);
+  // The linear target maps load to ramp: totalLoad/(7 × taper) − CTL_monday.
+  const impliedRamp = r1(totalLoad / (7 * taperF) - week.ctlMon);
+
+  // -- ramp ⇄ load coupling --
+  // Scale the plan to a total load: aerobic band hours stretch/shrink
+  // proportionally (preserving any hand-tuned mix), strength stays put.
+  const scaleToLoad = (N) => {
+    const sLoad = strengthH * (rates.Strength || PLANNER_CFG.defaultRates.Strength);
+    const curAero = totalLoad - strengthLoad;
+    const needAero = Math.max(0, N - sLoad);
+    let next;
+    if (curAero > 1) {
+      const f = needAero / curAero;
+      next = {};
+      for (const b of LP_BANDS) next[b.key] = r1h((bandHours[b.key] || 0) * f);
+    } else {
+      const perAeroRate = LP_BANDS.reduce((s, b) => s + lpPhaseMid(phase, b.key) * (rates[b.key] || PLANNER_CFG.defaultRates[b.key]), 0);
+      next = lpPrefillBands(phase, perAeroRate > 0 ? r1h(needAero / perAeroRate) : 0);
+    }
+    setBandHours(next);
+    setAerobicH(r1h(LP_BANDS.reduce((s, b) => s + (next[b.key] || 0), 0)));
+    setPreset(null);
+    setSaveMsg(null);
+  };
+  const applyRamp = (r) => {
+    setRampSel(r);
+    scaleToLoad(rampTarget(r));
+  };
+  const applyManualLoad = () => {
+    const N = Math.round(+loadInput);
+    if (!Number.isFinite(N) || N <= 0) return;
+    scaleToLoad(N);
+    setRampSel(r1(N / (7 * taperF) - week.ctlMon));
+    setLoadInput("");
+  };
 
   // Band shares vs the phase ranges (share of AEROBIC hours).
   const shares = {};
@@ -3189,7 +3239,7 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
 
   async function save() {
     const obj = {
-      isoWeek: week.isoWeek, ramp: week.ramp, phase,
+      isoWeek: week.isoWeek, ramp: r1(rampSel), phase,
       aerobicHours: aerobicH, strengthHours: strengthH,
       bandHours, hardCap, rates,
       savedAt: new Date().toISOString(),
@@ -3288,11 +3338,29 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
       <span style=${{ color: C.muted }} className="text-xs">planned load · ${fmtH(totalHours)} h</span>
     </div>
     <div className="mt-2.5">
-      <${LpBar} done=${totalLoad} target=${week.weeklyTarget} ceiling=${week.ceiling} pace=${null} height=${12} fill=${totalLoad > week.ceiling ? C.red : C.cyan} />
+      <${LpBar} done=${totalLoad} target=${targetLocal} ceiling=${week.ceiling} pace=${null} height=${12} fill=${totalLoad > week.ceiling ? C.red : C.cyan} />
       <div className="flex justify-between mt-1 text-[10px]" style=${{ color: C.muted }}>
         ${isMobile ? null : html`<span>0</span>`}
-        <span>target ${week.weeklyTarget} (${rampStr})</span>
+        <span>target ${targetLocal} (${rampStr})</span>
         <span style=${{ color: C.red }}>ceiling ${week.ceiling}</span>
+      </div>
+    </div>
+    <div className="flex items-center gap-3 flex-wrap mt-3">
+      <div className="flex items-center gap-2">
+        <span style=${{ color: C.muted, letterSpacing: "0.1em" }} className="text-[10px] font-semibold uppercase">Target ramp</span>
+        <${LpStepper} value=${rampSel} step=${1} min=${-5} max=${10} onChange=${applyRamp} fmt=${(v) => (v > 0 ? "+" + r1(v) : String(r1(v)))} />
+        <span style=${{ color: C.muted }} className="text-[10px]">CTL/wk</span>
+      </div>
+      <div className="flex items-center gap-1.5 ml-auto">
+        <span style=${{ color: C.muted }} className="text-[10px]">or set load</span>
+        <input type="number" inputMode="numeric" value=${loadInput} placeholder=${String(targetLocal)}
+          onInput=${(e) => setLoadInput(e.target.value)}
+          onKeyDown=${(e) => { if (e.key === "Enter") applyManualLoad(); }}
+          aria-label="Set weekly load directly"
+          style=${{ width: 68, background: C.bg, color: C.text, border: "1px solid " + C.border, borderRadius: 8, padding: "6px 8px" }} className="text-xs" />
+        <button onClick=${applyManualLoad} disabled=${!loadInput}
+          style=${{ background: loadInput ? C.cyan : "transparent", color: loadInput ? "#06212a" : C.border, border: "1px solid " + (loadInput ? C.cyan : C.border), borderRadius: 8, minHeight: 32, cursor: loadInput ? "pointer" : "default" }}
+          className="px-2.5 text-[11px] font-bold">Set</button>
       </div>
     </div>
   </div>`;
@@ -3469,8 +3537,9 @@ function LoadPlannerView() {
     if (cur && cur.isoWeek === lpIsoWeekKey(lpIso(new Date()))) {
       setTargets(cur);
       lpSaveLocalTargets(cur);
-      // The ramp travels inside the payload so it syncs too.
-      if (typeof cur.ramp === "number" && PLANNER_CFG.rampOptions.some((o) => o.v === cur.ramp)) {
+      // The ramp travels inside the payload so it syncs too. Custom
+      // values from the builder's load coupling are allowed.
+      if (typeof cur.ramp === "number" && isFinite(cur.ramp) && cur.ramp >= -5 && cur.ramp <= 10) {
         lpSaveRamp(cur.ramp);
         setRampState(cur.ramp);
       }
@@ -4040,7 +4109,12 @@ function LoadPlannerView() {
       raceLabel=${raceUpcoming ? Math.max(1, Math.round(daysToRace / 7)) + " week" + (Math.round(daysToRace / 7) === 1 ? "" : "s") + " to " + raceName : null}
       lastWeekHours=${lastWeekHours}
       savedTargets=${tgtBands}
-      onSaved=${(obj) => setTargets(obj)}
+      onSaved=${(obj) => {
+        setTargets(obj);
+        // Ramp chosen in the builder becomes the tab's ramp too, so the
+        // hero target, pace and week strip all follow it.
+        if (typeof obj.ramp === "number" && isFinite(obj.ramp) && obj.ramp !== ramp) setRamp(obj.ramp);
+      }}
       onSynced=${refreshServer} />
   </div>`;
 }
