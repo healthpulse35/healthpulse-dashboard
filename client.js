@@ -2310,14 +2310,13 @@ const PLANNER_CFG = {
   rampOptions: [
     { label: "Recovery", v: -1 },
     { label: "Hold", v: 0 },
-    { label: "Build +0.5", v: 0.5 },
-    { label: "Build +1", v: 1 },
-    { label: "Build +1.5", v: 1.5 },
-    { label: "Push +2", v: 2 },
+    { label: "Build +2", v: 2 },
+    { label: "Build +4", v: 4 },
+    { label: "Push +6", v: 6 },
   ],
-  defaultRamp: 1,
+  defaultRamp: 2,
   rampToDaily: 1 / (1 - Math.exp(-7 / 42)),  // ≈ 6.51 load/day per CTL point
-  rampMin: -2, rampMax: 3,    // custom ramps (from the builder's load coupling) clamp here
+  rampMin: -2, rampMax: 6,    // custom ramps (from the builder's load coupling) clamp here
   ceilingRamp: 8,             // ceiling = 7 × (CTL + 8): a daily-SURPLUS cap ≈ ACWR 1.3 (red line)
   rampKey: "hp_ramp_v1",
   targetsKey: "hp_planner_targets_v1",
@@ -2927,7 +2926,7 @@ function LpRampChip({ ramp, onChange, compact }) {
         </button>`;
       })}
       <div style=${{ color: C.muted, borderTop: "1px solid " + C.border }} className="text-[10px] px-3 pt-2 pb-1 mt-1">
-        Real CTL gain per week. +0.5–1.5 is a sustainable build; +2 is aggressive.
+        Real CTL gain per week. +2 is a solid build; +4–6 needs big load jumps — watch the ceiling and ACWR.
       </div>
     </div>` : null}
   </div>`;
@@ -3238,13 +3237,13 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
   // One-sentence read on what the chosen ramp means (handoff §H rail).
   const rampSentence = rampSel <= -0.5
     ? "Recovery — absorb fatigue; CTL gives a little back this week."
-    : rampSel < 0.5
+    : rampSel < 1
     ? "Holding — this week maintains fitness rather than building."
-    : rampSel <= 1.5
-    ? "A sustainable build — repeatable for several weeks in a row."
     : rampSel <= 2
-    ? "Aggressive — fine as a peak week; plan recovery after."
-    : "Overreaching — above the +2 danger line.";
+    ? "A solid build — repeatable for a few weeks in a row."
+    : rampSel <= 4
+    ? "A big build week — expect the ceiling and ACWR flags; follow with recovery."
+    : "Push — a race-prep spike well above the safe ramp; treat as a one-off.";
 
   async function save() {
     const obj = {
