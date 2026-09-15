@@ -75,11 +75,11 @@ const C = new Proxy({}, {
 });
 // Apply the persisted theme immediately so the first paint matches.
 applyTheme(_theme);
-const sportColor = { Run: "#34d399", Bike: "#2dd4ee", Swim: "#818cf8", Strength: "#fbbf24", Other: "#9aa6b6" };
+const sportColor = { Run: "#34d399", Bike: "#2dd4ee", Swim: "#818cf8", Strength: "#fbbf24", HIIT: "#f97316", Other: "#9aa6b6" };
 const zoneColor = ["#5b6b82", "#34d399", "#fbbf24", "#fb923c", "#f87171"];
 const zoneKeys = ["Z1", "Z2", "Z3", "Z4", "Z5"];
 const zoneName = ["Z1 Recovery", "Z2 Endurance", "Z3 Tempo", "Z4 Threshold", "Z5 VO2max"];
-const SPORTS = ["Run", "Bike", "Swim", "Strength"];
+const SPORTS = ["Run", "Bike", "Swim", "Strength", "HIIT"];
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const r1 = (v) => Math.round(v * 10) / 10;
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -105,6 +105,9 @@ const DAYS = RAW.days.map((d) => {
       Strength: { load: d.perSport.Strength.load, dist: d.perSport.Strength.dist_km, dur: d.perSport.Strength.dur_h * 60 },
       // Erg (rowing / ski erg / elliptical…) + Other are newer server keys —
       // guard so a stale cached payload without them still renders.
+      HIIT: d.perSport.HIIT
+        ? { load: d.perSport.HIIT.load, dist: d.perSport.HIIT.dist_km, dur: d.perSport.HIIT.dur_h * 60 }
+        : { load: 0, dist: 0, dur: 0 },
       Erg: d.perSport.Erg
         ? { load: d.perSport.Erg.load, dist: d.perSport.Erg.dist_km, dur: d.perSport.Erg.dur_h * 60 }
         : { load: 0, dist: 0, dur: 0 },
@@ -1821,11 +1824,11 @@ const CAL_ZONES = [
 ];
 const CAL_SPORT_ICON = {
   run: IconRun, bike: IconBike, swim: IconSwim,
-  strength: IconStrength, hyrox: IconHyrox, cardio: IconCardio,
+  strength: IconStrength, hiit: IconHyrox, hyrox: IconHyrox, cardio: IconCardio,
 };
 const CAL_SPORT_LABEL = {
   run: "Run", bike: "Bike", swim: "Swim",
-  strength: "Strength", hyrox: "Hyrox", cardio: "Cardio",
+  strength: "Strength", hiit: "HIIT", hyrox: "Hyrox", cardio: "Cardio",
 };
 const CAL_TYPE_COLOR = {
   "VO2 Max": "#ef4444", "Threshold": "#f97316", "Tempo": "#eab308",
@@ -2395,7 +2398,7 @@ function lpPhaseMid(phase, band) {
   return (a + b) / 2 / 100;
 }
 
-const LP_GROUPS = ["Run", "Strength", "Erg-Bike", "Other"];
+const LP_GROUPS = ["Run", "Strength", "HIIT", "Erg-Bike", "Other"];
 const LP_LIGHT_COLOR = () => ({ green: C.green, amber: C.amber, red: C.red });
 const LP_WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -2419,15 +2422,16 @@ function lpIsoWeekKey(iso) {
 // DAYS indexed by ISO date for O(1) lookups.
 const LP_BY_ISO = new Map(DAYS.map((d) => [lpIso(d.date), d]));
 
-// A day's load split into the planner's four display groups. "Erg-Bike"
+// A day's load split into the planner's five display groups. "Erg-Bike"
 // merges the server's Erg + Bike groups; Other absorbs Swim and anything
 // unmapped (loadTotal minus the named groups, so nothing is ever lost).
 function lpDayGroups(d) {
-  if (!d) return { Run: 0, Strength: 0, "Erg-Bike": 0, Other: 0 };
+  if (!d) return { Run: 0, Strength: 0, HIIT: 0, "Erg-Bike": 0, Other: 0 };
   const run = d.perSport.Run.load;
   const str = d.perSport.Strength.load;
+  const hiit = d.perSport.HIIT.load;
   const erg = d.perSport.Erg.load + d.perSport.Bike.load;
-  return { Run: run, Strength: str, "Erg-Bike": erg, Other: Math.max(0, d.loadTotal - run - str - erg) };
+  return { Run: run, Strength: str, HIIT: hiit, "Erg-Bike": erg, Other: Math.max(0, d.loadTotal - run - str - hiit - erg) };
 }
 
 // Is a server workout row an easy session? ≥70% of banded HR time in
@@ -2585,7 +2589,7 @@ function lpWeekMath(todayIso, ramp, raceDate) {
   }
 
   let done = 0;
-  const doneByGroup = { Run: 0, Strength: 0, "Erg-Bike": 0, Other: 0 };
+  const doneByGroup = { Run: 0, Strength: 0, HIIT: 0, "Erg-Bike": 0, Other: 0 };
   for (let i = 0; i <= dayIdx; i++) {
     const d = LP_BY_ISO.get(lpAddDays(mon, i));
     if (!d) continue;
@@ -2825,7 +2829,7 @@ function lpToken() {
 }
 const LP_API = "https://ptisuvfdufngdfxfrzvn.supabase.co/functions/v1/dashboard?resource=planner&token=";
 
-const LP_GROUP_LABEL = { Run: "Run", Strength: "Strength", "Erg-Bike": "Erg / Bike", Other: "Other" };
+const LP_GROUP_LABEL = { Run: "Run", Strength: "Strength", HIIT: "HIIT", "Erg-Bike": "Erg / Bike", Other: "Other" };
 const LP_WD_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 // -- small UI atoms (styling mirrors load-planner-mockups/*.html) --
@@ -3767,7 +3771,7 @@ function LoadPlannerView() {
       plannedByDate.set(p.date, cur);
     }
     const out = [];
-    const plannedByGroup = { Run: 0, Strength: 0, "Erg-Bike": 0, Other: 0 };
+    const plannedByGroup = { Run: 0, Strength: 0, HIIT: 0, "Erg-Bike": 0, Other: 0 };
     let plannedFutureSum = 0, plannedHard = 0;
     const unplannedIdx = [];
     for (let i = 0; i < 7; i++) {
