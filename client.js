@@ -1055,7 +1055,7 @@ function BiomarkersView() {
     : "Optimized: badges apply narrower athlete / longevity targets when the panel has them, so borderline-in-range markers can still flag.";
 
   return html`<div>
-    <div className="flex items-end justify-between flex-wrap gap-3 mb-4">
+    <div className="pr-[150px] sm:pr-0 flex items-end justify-between flex-wrap gap-3 mb-4">
       <div>
         <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Blood Panel</div>
         <h1 className="text-2xl font-bold mt-1">Biomarkers</h1>
@@ -1715,7 +1715,7 @@ function RecommendationsView() {
   ].filter(Boolean);
 
   return html`<div>
-    <div className="mb-5">
+    <div className="pr-[150px] sm:pr-0 mb-5">
       <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Action Plan</div>
       <h1 className="text-2xl font-bold mt-1">Recommendations</h1>
       <p className="text-xs leading-relaxed mt-2" style=${{ color: C.muted, maxWidth: 600 }}>
@@ -2258,7 +2258,7 @@ function CalendarView() {
   const renderWk = (wk) => html`<${CalWeekBlock} key=${wk.start} wk=${wk} todayIso=${todayIso} isMobile=${isMobile} onSelect=${setSel} />`;
 
   return html`<div>
-    <div style=${{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 12, marginBottom: 18 }}>
+    <div className="pr-[150px] sm:pr-0" style=${{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 12, marginBottom: 18 }}>
       <div>
         <div style=${{ fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", color: C.muted, fontWeight: 600 }}>Training Log</div>
         <div style=${{ fontSize: 26, fontWeight: 700, display: "flex", alignItems: "center", gap: 9, color: C.text }}>
@@ -4036,7 +4036,9 @@ function LoadPlannerView() {
         <h1 className="text-2xl font-bold mt-1">This Week</h1>
         <div style=${{ color: C.muted }} className="text-xs mt-1">${subline.join(" · ")}</div>
       </div>
-      <${LpRampChip} ramp=${ramp} onChange=${setRamp} compact=${isMobile} />
+      <div className="mr-[150px] sm:mr-0">
+        <${LpRampChip} ramp=${ramp} onChange=${setRamp} compact=${isMobile} />
+      </div>
     </div>
 
     ${serverErr ? html`<div style=${{ color: C.muted, border: "1px solid " + C.border, borderRadius: 10 }} className="text-[11px] px-3 py-2 mb-4">
@@ -4668,7 +4670,44 @@ function App() {
   // The underline row is desktop-only: on phones the tabs live in the
   // fixed bottom nav (MobileNav) instead, so all that's left up here is
   // the Sync + theme pair.
-  const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4 flex flex-wrap items-center justify-between" style=${{ borderBottom: "1px solid " + C.border }}>
+  // Sync + theme pair. On desktop it rides the right end of the tab row;
+  // on mobile that row is gone, so it's overlaid on the right end of
+  // whichever view header is showing (see MobileControls) rather than
+  // getting a band of its own above the heading.
+  const Controls = html`<${React.Fragment}>
+    ${syncMsg ? html`<span style=${{ fontSize: 11, color: syncState === "error" ? C.red : C.green, fontWeight: 500, maxWidth: 190 }} className="truncate">${syncMsg}</span>` : null}
+    <button onClick=${triggerSync}
+      disabled=${syncState === "dispatching"}
+      title="Re-sync all sources (Strava, intervals.icu, sheets)"
+      style=${{
+        background: syncState === "sent" ? C.green + "22" : C.bg,
+        color: syncState === "sent" ? C.green : syncState === "error" ? C.red : C.muted,
+        border: "1px solid " + (syncState === "sent" ? C.green + "55" : syncState === "error" ? C.red + "55" : C.border),
+        borderRadius: 999,
+        cursor: syncState === "dispatching" ? "wait" : "pointer",
+        opacity: syncState === "dispatching" ? 0.7 : 1,
+      }}
+      className="px-3 py-1.5 text-xs font-semibold transition-colors flex items-center gap-1.5">
+      <span style=${{ display: "inline-flex", animation: syncState === "dispatching" ? "calSpin 1s linear infinite" : "none" }}>
+        <${IconRefresh} size=${13} />
+      </span>
+      <span>${syncState === "dispatching" ? "Syncing…" : syncState === "sent" ? "Triggered" : "Sync"}</span>
+    </button>
+    <button onClick=${toggleTheme}
+      title=${theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      style=${{ background: C.bg, color: C.muted, border: "1px solid " + C.border, borderRadius: 999 }}
+      className="px-3 py-1.5 text-xs font-semibold transition-colors flex items-center gap-1.5">
+      <span style=${{ fontSize: 14 }}>${theme === "dark" ? "☀" : "☾"}</span>
+      <span className="hidden sm:inline">${theme === "dark" ? "Light" : "Dark"}</span>
+    </button>
+  <//>`;
+
+  // Phones: pinned to the top-right of the content area so it sits level
+  // with the view's heading instead of costing a row of its own. Every
+  // view header reserves `pr-[150px]` on mobile so nothing runs under it.
+  const MobileControls = html`<div className="sm:hidden absolute right-2 top-1 z-20 flex items-center gap-2">${Controls}<//>`;
+
+  const TabBar = html`<div className="hidden sm:flex max-w-7xl mx-auto px-1 mb-4 flex-wrap items-center justify-between" style=${{ borderBottom: "1px solid " + C.border }}>
     <div className="hidden sm:flex max-w-full overflow-x-auto" style=${{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
       ${TABS.map(({ name: t }) => {
         const on = t === tab;
@@ -4677,33 +4716,7 @@ function App() {
           className="px-3 sm:px-4 py-2.5 text-sm font-semibold transition-colors">${t}</button>`;
       })}
     </div>
-    <div className="flex items-center gap-2 mr-1 mb-2 ml-auto">
-      ${syncMsg ? html`<span style=${{ fontSize: 11, color: syncState === "error" ? C.red : C.green, fontWeight: 500, maxWidth: 190 }} className="truncate">${syncMsg}</span>` : null}
-      <button onClick=${triggerSync}
-        disabled=${syncState === "dispatching"}
-        title="Re-sync all sources (Strava, intervals.icu, sheets)"
-        style=${{
-          background: syncState === "sent" ? C.green + "22" : "transparent",
-          color: syncState === "sent" ? C.green : syncState === "error" ? C.red : C.muted,
-          border: "1px solid " + (syncState === "sent" ? C.green + "55" : syncState === "error" ? C.red + "55" : C.border),
-          borderRadius: 999,
-          cursor: syncState === "dispatching" ? "wait" : "pointer",
-          opacity: syncState === "dispatching" ? 0.7 : 1,
-        }}
-        className="px-3 py-1.5 text-xs font-semibold transition-colors flex items-center gap-1.5">
-        <span style=${{ display: "inline-flex", animation: syncState === "dispatching" ? "calSpin 1s linear infinite" : "none" }}>
-          <${IconRefresh} size=${13} />
-        </span>
-        <span>${syncState === "dispatching" ? "Syncing…" : syncState === "sent" ? "Triggered" : "Sync"}</span>
-      </button>
-      <button onClick=${toggleTheme}
-        title=${theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-        style=${{ background: "transparent", color: C.muted, border: "1px solid " + C.border, borderRadius: 999 }}
-        className="px-3 py-1.5 text-xs font-semibold transition-colors flex items-center gap-1.5">
-        <span style=${{ fontSize: 14 }}>${theme === "dark" ? "☀" : "☾"}</span>
-        <span className="hidden sm:inline">${theme === "dark" ? "Light" : "Dark"}</span>
-      </button>
-    </div>
+    <div className="flex items-center gap-2 mr-1 mb-2 ml-auto">${Controls}</div>
   </div>`;
 
   // Mobile bottom nav — phones only. Pinned to the bottom of the viewport
@@ -4719,6 +4732,8 @@ function App() {
     background: C.card,
     borderTop: "1px solid " + C.border,
     boxShadow: theme === "dark" ? "0 -8px 24px rgba(0,0,0,0.45)" : "0 -6px 18px rgba(15,23,34,0.10)",
+    // Keeps the labels clear of the iPhone home indicator. Needs
+    // viewport-fit=cover in index.html for env() to resolve to anything.
     paddingBottom: "env(safe-area-inset-bottom, 0px)",
   }}>
     <div className="flex items-stretch">
@@ -4729,7 +4744,7 @@ function App() {
           aria-current=${on ? "page" : null}
           title=${name}
           style=${{
-            flex: "1 1 0", minWidth: 0, minHeight: 58,
+            flex: "1 1 0", minWidth: 0, minHeight: 56,
             background: on ? C.cyan + "14" : "transparent",
             border: "none",
             borderTop: "2px solid " + (on ? C.cyan : "transparent"),
@@ -4737,16 +4752,20 @@ function App() {
             WebkitTapHighlightColor: "transparent",
             cursor: "pointer",
           }}
-          className="flex flex-col items-center justify-center gap-1 px-0.5 transition-colors">
+          className="flex flex-col items-center justify-center gap-1 px-0.5 pt-2 pb-2.5 transition-colors">
           <${Icon} size=${21} strokeWidth=${on ? 2.4 : 1.8} />
-          <span style=${{ fontSize: 10, lineHeight: 1.1, fontWeight: on ? 700 : 500 }}
-            className="block w-full truncate text-center">${short}</span>
+          <!-- lineHeight has to clear the font's descenders: at 1.1 the
+               line box is shorter than the glyphs, and the "g" in Training
+               / "y" in Library get cut off at the bottom. -->
+          <span style=${{ fontSize: 10, lineHeight: 1.45, fontWeight: on ? 700 : 500 }}
+            className="block w-full text-center">${short}</span>
         </button>`;
       })}
     </div>
   </nav>`;
 
-  return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-2 sm:p-6">
+  return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%", position: "relative" }} className="p-2 sm:p-6">
+    ${MobileControls}
     ${tab === "Training" ? html`<div className="hidden sm:flex fixed left-3 top-1/2 -translate-y-1/2 flex-col gap-2 z-10">
       ${["1M", "3M", "6M", "1Y", "2Y", "All"].map((o) => {
         const on = o === range;
@@ -4774,7 +4793,7 @@ function App() {
     ${tab === "Workout Library" ? html`<div className="max-w-7xl mx-auto"><${WorkoutLibraryView} /></div>` : null}
 
     ${tab !== "Training" ? null : html`<div className="max-w-7xl mx-auto">
-      <div className="flex items-end justify-between flex-wrap gap-3 mb-5">
+      <div className="pr-[150px] sm:pr-0 flex items-end justify-between flex-wrap gap-3 mb-5">
         <div>
           <div style=${{ color: C.muted, letterSpacing: "0.18em" }} className="text-xs font-semibold uppercase">Training Overview</div>
           <h1 className="text-2xl font-bold mt-1">Long-Term Trends</h1>
@@ -5194,7 +5213,7 @@ function App() {
     </div>`}
 
     <!-- Spacer so the last card can scroll clear of the fixed bottom nav. -->
-    <div className="sm:hidden" aria-hidden="true" style=${{ height: "calc(74px + env(safe-area-inset-bottom, 0px))" }} />
+    <div className="sm:hidden" aria-hidden="true" style=${{ height: "calc(78px + env(safe-area-inset-bottom, 0px))" }} />
 
     ${MobileNav}
   </div>`;
