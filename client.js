@@ -26,6 +26,8 @@ import {
   ChevronDown as IconChevronDown, RefreshCw as IconRefresh,
   Pencil as IconPencil, Settings as IconSettings, ChevronRight as IconChevronRight,
   Minus as IconMinus, Plus as IconPlus, AlertCircle as IconAlert, Check as IconTick,
+  TrendingUp as IconTrend, Droplet as IconDroplet, Lightbulb as IconBulb,
+  BookOpen as IconBook,
 } from "https://esm.sh/lucide-react@0.460.0?deps=react@18.3.1";
 
 const html = htm.bind(React.createElement);
@@ -4255,6 +4257,19 @@ function WorkoutLibraryView() {
   />`;
 }
 
+// Tab definitions — shared by the desktop underline row and the mobile
+// bottom nav. `short` keeps the bottom-bar label inside its ~62px column
+// on a 375px-wide phone; the full `name` is still the state value so
+// nothing downstream changes.
+const TABS = [
+  { name: "Training",        short: "Training", Icon: IconTrend },
+  { name: "Load Planner",    short: "Planner",  Icon: IconTarget },
+  { name: "Calendar",        short: "Calendar", Icon: IconCalendar },
+  { name: "Biomarkers",      short: "Bio",      Icon: IconDroplet },
+  { name: "Recommendations", short: "Recs",     Icon: IconBulb },
+  { name: "Workout Library", short: "Library",  Icon: IconBook },
+];
+
 function App() {
   const [tab, setTab] = useState("Training");
   const [theme, setTheme] = useState(_theme);
@@ -4650,9 +4665,12 @@ function App() {
 
   // Tab bar — always rendered; the Training-only floating range selector
   // is conditioned on the active tab so it doesn't show on Biomarkers.
+  // The underline row is desktop-only: on phones the tabs live in the
+  // fixed bottom nav (MobileNav) instead, so all that's left up here is
+  // the Sync + theme pair.
   const TabBar = html`<div className="max-w-7xl mx-auto px-1 mb-4 flex flex-wrap items-center justify-between" style=${{ borderBottom: "1px solid " + C.border }}>
-    <div className="flex max-w-full overflow-x-auto" style=${{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
-      ${["Training", "Load Planner", "Calendar", "Biomarkers", "Recommendations", "Workout Library"].map((t) => {
+    <div className="hidden sm:flex max-w-full overflow-x-auto" style=${{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
+      ${TABS.map(({ name: t }) => {
         const on = t === tab;
         return html`<button key=${t} onClick=${() => setTab(t)}
           style=${{ color: on ? C.text : C.muted, borderBottom: "2px solid " + (on ? C.cyan : "transparent"), marginBottom: -1, background: "transparent", whiteSpace: "nowrap", flexShrink: 0 }}
@@ -4687,6 +4705,46 @@ function App() {
       </button>
     </div>
   </div>`;
+
+  // Mobile bottom nav — phones only. Pinned to the bottom of the viewport
+  // so switching tabs is a thumb-reach away instead of a scroll back to
+  // the top, and so all six fit side by side without the horizontal
+  // scroll the top row needed. Each cell is a ~58px square-ish target
+  // (well past the 44px minimum) with an icon over a short label, and the
+  // active one gets a cyan top rule + cyan icon/label so the current tab
+  // reads at a glance. zIndex sits below the modals/drawers (50-70) so
+  // those still cover it.
+  const MobileNav = html`<nav className="sm:hidden" style=${{
+    position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 30,
+    background: C.card,
+    borderTop: "1px solid " + C.border,
+    boxShadow: theme === "dark" ? "0 -8px 24px rgba(0,0,0,0.45)" : "0 -6px 18px rgba(15,23,34,0.10)",
+    paddingBottom: "env(safe-area-inset-bottom, 0px)",
+  }}>
+    <div className="flex items-stretch">
+      ${TABS.map(({ name, short, Icon }) => {
+        const on = name === tab;
+        return html`<button key=${name}
+          onClick=${() => { setTab(name); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+          aria-current=${on ? "page" : null}
+          title=${name}
+          style=${{
+            flex: "1 1 0", minWidth: 0, minHeight: 58,
+            background: on ? C.cyan + "14" : "transparent",
+            border: "none",
+            borderTop: "2px solid " + (on ? C.cyan : "transparent"),
+            color: on ? C.cyan : C.muted,
+            WebkitTapHighlightColor: "transparent",
+            cursor: "pointer",
+          }}
+          className="flex flex-col items-center justify-center gap-1 px-0.5 transition-colors">
+          <${Icon} size=${21} strokeWidth=${on ? 2.4 : 1.8} />
+          <span style=${{ fontSize: 10, lineHeight: 1.1, fontWeight: on ? 700 : 500 }}
+            className="block w-full truncate text-center">${short}</span>
+        </button>`;
+      })}
+    </div>
+  </nav>`;
 
   return html`<div style=${{ background: C.bg, color: C.text, minHeight: "100%" }} className="p-2 sm:p-6">
     ${tab === "Training" ? html`<div className="hidden sm:flex fixed left-3 top-1/2 -translate-y-1/2 flex-col gap-2 z-10">
@@ -5134,6 +5192,11 @@ function App() {
         Live data · ${DAYS.length} days · ${AE_SESSIONS.length} aerobic-efficiency sessions · ${races.length} race${races.length === 1 ? "" : "s"}
       </div>
     </div>`}
+
+    <!-- Spacer so the last card can scroll clear of the fixed bottom nav. -->
+    <div className="sm:hidden" aria-hidden="true" style=${{ height: "calc(74px + env(safe-area-inset-bottom, 0px))" }} />
+
+    ${MobileNav}
   </div>`;
 }
 
