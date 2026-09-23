@@ -2976,8 +2976,9 @@ function LpWeekStrip({ days, isMobile }) {
               <span style=${{ color: C.text }} className="font-bold shrink-0">${Math.round(w.load)}</span>
             </div>`)}
           </div>` : null}
-          <div style=${{ color: d.isToday ? C.cyan : C.muted }} className="text-[10px] font-semibold mb-1 text-center leading-tight">
-            ${isMobile ? "" : d.wd + " " + d.dom}${!isMobile && d.isToday ? " · today" : ""}${isMobile ? " " : ""}
+          <div style=${{ color: d.isToday ? C.cyan : C.muted, height: isMobile ? undefined : 26 }} className="text-[10px] font-semibold mb-1 text-center leading-tight whitespace-nowrap">
+            ${isMobile ? " " : d.wd + " " + d.dom}
+            ${!isMobile && d.isToday ? html`<div>today</div>` : null}
           </div>
           <div style=${{ height: BAR_H }} className="w-full flex items-end justify-center">
             ${d.kind === "suggested"
