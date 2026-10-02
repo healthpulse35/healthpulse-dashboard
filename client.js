@@ -100,6 +100,11 @@ const DAYS = RAW.days.map((d) => {
     date: dt,
     label: fmtDate(dt),
     loadTotal: d.loadTotal,
+    // Share of the day's load that feeds Fitness (CTL) after intervals.icu's
+    // per-sport discount (strength 20%, HIIT 75%, padel 50% — server
+    // CTL_FACTOR). Fatigue/ACWR and the load charts keep loadTotal.
+    // Stale payloads without ctlLoad fall back to the full load.
+    fitnessLoad: d.ctlLoad ?? d.loadTotal,
     perSport: {
       Run: { load: d.perSport.Run.load, dist: d.perSport.Run.dist_km, dur: d.perSport.Run.dur_h * 60 },
       Bike: { load: d.perSport.Bike.load, dist: d.perSport.Bike.dist_km, dur: d.perSport.Bike.dur_h * 60 },
@@ -2320,6 +2325,15 @@ const PLANNER_CFG = {
   ],
   defaultRamp: 2,
   rampToDaily: 1 / (1 - Math.exp(-7 / 42)),  // ≈ 6.51 load/day per CTL point
+  // Fitness vs total load. intervals.icu discounts some sports before the
+  // load feeds CTL (Settings → per activity type "Fitness %": WeightTraining
+  // 0.20, HIIT 0.75, Padel 0.50; mirror of index.ts CTL_FACTOR). The ramp
+  // math above is in FITNESS load; every target the UI shows is in TOTAL
+  // load (what the load charts, ladder and progress bars count), converted
+  // by the training mix — see lpFitnessShare.
+  strengthCtlFactor: 0.2,
+  fitnessShareDays: 28,       // trailing window for the tab's mix estimate
+  fitnessShareMin: 0.5,       // guard: never inflate a target more than 2×
   rampMin: -2, rampMax: 6,    // custom ramps (from the builder's load coupling) clamp here
   ceilingRamp: 8,             // ceiling = 7 × (CTL + 8): a daily-SURPLUS cap ≈ ACWR 1.3 (red line)
   rampKey: "hp_ramp_v1",
@@ -2559,12 +2573,28 @@ function lpIntensitySplit(weekWorkouts) {
   return { doneH, strengthH, aerobicH };
 }
 
+// Fraction of TOTAL load that reached Fitness over the trailing window
+// (Σ fitnessLoad / Σ loadTotal). Strength-heavy weeks → < 1. Used to turn
+// a fitness-load requirement into the total-load target the UI shows.
+function lpFitnessShare(todayIso) {
+  let tot = 0, fit = 0;
+  for (let i = 0; i < PLANNER_CFG.fitnessShareDays; i++) {
+    const d = LP_BY_ISO.get(lpAddDays(todayIso, -i));
+    if (!d) continue;
+    tot += d.loadTotal || 0;
+    fit += d.fitnessLoad ?? d.loadTotal ?? 0;
+  }
+  if (tot <= 0) return 1;
+  return Math.min(1, Math.max(PLANNER_CFG.fitnessShareMin, fit / tot));
+}
+
 // Weekly load target + progress for the week containing todayIso.
 //
-// weeklyTarget = 7 × (CTL_monday + rampToDaily × ramp) — the exact EWMA
-// solve for "what load this week lifts CTL by `ramp` by Sunday": a
+// fitnessTarget = 7 × (CTL_monday + rampToDaily × ramp) — the exact EWMA
+// solve for "what FITNESS load this week lifts CTL by `ramp` by Sunday": a
 // constant daily load L moves CTL by (L − CTL) × (1 − e^(−7/42)) over 7
-// days, so L = CTL + ramp / (1 − e^(−7/42)).
+// days, so L = CTL + ramp / (1 − e^(−7/42)). weeklyTarget is that in
+// TOTAL load (÷ fitnessShare), the currency `done` and the charts use.
 function lpWeekMath(todayIso, ramp, raceDate) {
   const mon = lpMondayOf(todayIso);
   const dayIdx = Math.min(6, Math.max(0, lpDaysBetween(mon, todayIso))); // 0=Mon..6=Sun
@@ -2575,8 +2605,11 @@ function lpWeekMath(todayIso, ramp, raceDate) {
     (LP_BY_ISO.get(mon) || {}).fitness ??
     (DAYS.length ? DAYS[DAYS.length - 1].fitness : 0) ?? 0;
 
-  let weeklyTarget = Math.round(7 * (ctlMon + PLANNER_CFG.rampToDaily * ramp));
-  const ceiling = Math.round(7 * (ctlMon + PLANNER_CFG.ceilingRamp));
+  const fitnessShare = lpFitnessShare(todayIso);
+  let weeklyTarget = Math.round(7 * (ctlMon + PLANNER_CFG.rampToDaily * ramp) / fitnessShare);
+  // CTL ÷ share ≈ the chronic TOTAL load, the baseline ACWR (full load)
+  // measures against — so the red line scales the same way.
+  const ceiling = Math.round(7 * (ctlMon + PLANNER_CFG.ceilingRamp) / fitnessShare);
 
   // Taper: inside 14 days of the race the target auto-reduces (×0.7,
   // ×0.5 in race week). Skipped entirely once the race has passed.
@@ -2612,7 +2645,7 @@ function lpWeekMath(todayIso, ramp, raceDate) {
   const status = done > ceiling ? "over" : done >= pace * 0.9 ? "on" : "behind";
 
   return {
-    mon, dayIdx, ctlMon, ramp, weeklyTarget, ceiling, taper,
+    mon, dayIdx, ctlMon, ramp, weeklyTarget, ceiling, taper, fitnessShare,
     done: Math.round(done), doneByGroup, lastWeekTotal: Math.round(lastWeekTotal),
     daysElapsed, daysLeft, pace, neededPerDay, status,
     isoWeek: lpIsoWeekKey(todayIso),
@@ -2780,11 +2813,13 @@ function lpGuardrails(todayIso, todayHi) {
 }
 
 // Project CTL + ACWR to Sunday: spread the remaining planned load evenly
-// over the remaining days and run the standard EWMAs forward. Today's CTL
+// over the remaining days and run the standard EWMAs forward. CTL steps on
+// the fitness share of that load (fitnessShare = plan's fitness/total);
+// ACWR stays on total load, like intervals.icu's fatigue. Today's CTL
 // already includes today's completed load, so we simulate the days AFTER
 // today (plus any load still to come today lands in tomorrow's step —
 // close enough for a Sunday estimate).
-function lpProjectSunday(todayIso, plannedWeekTotal, doneSoFar) {
+function lpProjectSunday(todayIso, plannedWeekTotal, doneSoFar, fitnessShare = 1) {
   const mon = lpMondayOf(todayIso);
   const dayIdx = Math.min(6, Math.max(0, lpDaysBetween(mon, todayIso)));
   const nFuture = 6 - dayIdx;
@@ -2795,7 +2830,7 @@ function lpProjectSunday(todayIso, plannedWeekTotal, doneSoFar) {
   const k = 1 - Math.exp(-1 / 42);
   const hist = DAYS.slice(-28).map((d) => d.loadTotal);
   for (let i = 0; i < nFuture; i++) {
-    ctl = ctl + (daily - ctl) * k;
+    ctl = ctl + (daily * fitnessShare - ctl) * k;
     hist.push(daily);
   }
   const h7 = hist.slice(-7), h28 = hist.slice(-28);
@@ -3095,19 +3130,25 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
 
   // Local target from the in-builder ramp (TRUE CTL gain/week — see the
   // rampToDaily comment in PLANNER_CFG), taper factor applied like on
-  // the tab.
+  // the tab. fitnessTarget is in FITNESS load; the shown target is TOTAL
+  // load = fitness target + the part of the plan's strength load that
+  // intervals.icu discounts (only strengthCtlFactor of it reaches CTL).
   const taperF = week.taper ? week.taper.factor : 1;
-  const rampTarget = (r) => Math.round(7 * (week.ctlMon + PLANNER_CFG.rampToDaily * r) * taperF);
+  const sCtlF = PLANNER_CFG.strengthCtlFactor;
+  const fitnessTarget = (r) => 7 * (week.ctlMon + PLANNER_CFG.rampToDaily * r) * taperF;
+  const strengthDiscount = () => Math.round(strengthH * (rates.Strength || PLANNER_CFG.defaultRates.Strength) * (1 - sCtlF));
+  const rampTarget = (r) => Math.round(fitnessTarget(r) + strengthDiscount());
   const targetLocal = rampTarget(rampSel);
 
   // "Standard" baseline: strength hours copied from last week (3 h
-  // default), aerobic hours solved so the priced plan lands on the ramp
-  // target. Presets scale HOURS only — the phase owns the zone split.
-  const stdHours = (ph, rr, target) => {
+  // default), aerobic hours solved so the priced plan lands on the ramp's
+  // FITNESS target (strength only counts strengthCtlFactor toward it).
+  // Presets scale HOURS only — the phase owns the zone split.
+  const stdHours = (ph, rr, fitTarget) => {
     const sH = lastWeekHours ? r1h(lastWeekHours.strengthH) : 3;
     const perAeroRate = LP_BANDS.reduce((s, b) => s + lpPhaseMid(ph, b.key) * (rr[b.key] || PLANNER_CFG.defaultRates[b.key]), 0);
     const aH = perAeroRate > 0
-      ? Math.max(0, (target - sH * (rr.Strength || PLANNER_CFG.defaultRates.Strength)) / perAeroRate)
+      ? Math.max(0, (fitTarget - sH * (rr.Strength || PLANNER_CFG.defaultRates.Strength) * sCtlF) / perAeroRate)
       : 0;
     return { aerobicH: r1h(aH), strengthH: sH };
   };
@@ -3136,7 +3177,7 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
       setRates({ ...rr, ...(t.rates || {}) });
       setPreset(null);
     } else {
-      const hrs = stdHours(phaseAuto, rr, rampTarget(r0));
+      const hrs = stdHours(phaseAuto, rr, fitnessTarget(r0));
       setPhase(phaseAuto);
       setAerobicH(hrs.aerobicH);
       setStrengthH(hrs.strengthH);
@@ -3160,9 +3201,12 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
   const hoursInRange = totalHours >= hoursRange[0] && totalHours <= hoursRange[1];
   const gap = targetLocal - totalLoad;
   const rampStr = rampSel > 0 ? "+" + r1(rampSel) : String(r1(rampSel));
-  const proj = lpProjectSunday(lpAddDays(week.mon, week.dayIdx), totalLoad, week.done);
-  // Back-solve the TRUE CTL ramp a load implies (inverse of rampTarget).
-  const loadToRamp = (N) => r1((N / (7 * taperF) - week.ctlMon) / PLANNER_CFG.rampToDaily);
+  const planFitness = totalLoad - strengthLoad * (1 - sCtlF);
+  const proj = lpProjectSunday(lpAddDays(week.mon, week.dayIdx), totalLoad, week.done,
+    totalLoad > 0 ? planFitness / totalLoad : 1);
+  // Back-solve the TRUE CTL ramp a TOTAL load implies (inverse of
+  // rampTarget, holding the current strength load).
+  const loadToRamp = (N) => r1(((N - strengthDiscount()) / (7 * taperF) - week.ctlMon) / PLANNER_CFG.rampToDaily);
   const impliedRamp = loadToRamp(totalLoad);
 
   // -- hour plumbing --
@@ -3201,7 +3245,7 @@ function LoadBuilderModal({ open, onClose, isMobile, calibrated, week, phaseAuto
     let hrs;
     if (name === "copy" && lastWeekHours) hrs = { aerobicH: r1h(lastWeekHours.aerobicH), strengthH: r1h(lastWeekHours.strengthH) };
     else {
-      hrs = stdHours(phase, rates, targetLocal);
+      hrs = stdHours(phase, rates, fitnessTarget(rampSel));
       if (name === "illness") hrs = { aerobicH: r1h(hrs.aerobicH * 0.7), strengthH: r1h(hrs.strengthH * 0.7) };
       else if (name === "recovery") hrs = { aerobicH: r1h(hrs.aerobicH * 0.8), strengthH: r1h(hrs.strengthH * 0.8) };
     }
